@@ -1,0 +1,31 @@
+{
+  "id": "gami-discord-recruit",
+  "name": "Gami Discord Recruitment",
+  "description": "Discord member scanning and DM conversation manager for Gami gaming platform. Uses browser-based Discord access and local LLM for private conversations.",
+  "version": "1.0.0",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxDmTurns": {
+        "type": "number",
+        "description": "Max AI turns per DM conversation before human takeover (default: 5)"
+      },
+      "takeoverMessage": {
+        "type": "string",
+        "description": "Message to send to user when handing over to human agent"
+      }
+    }
+  },
+  "uiHints": {
+    "maxDmTurns": {
+      "label": "Max DM Turns",
+      "placeholder": "5"
+    },
+    "takeoverMessage": {
+      "label": "Human Takeover Message",
+      "placeholder": "感谢您的耐心！人工客服将接管后续沟通。"
+    }
+  }
+}
