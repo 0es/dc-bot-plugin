@@ -36,7 +36,7 @@ OpenClaw Gateway (主节点)
 | 多机器人并行 | 每个 bot 独立的 CDP 连接 + ConversationStore 命名空间 |
 | 接收 Discord DM | CDP 轮询未读指示器，解析 DOM 消息内容 |
 | 发送 Discord DM | CDP `Input.insertText` + `Enter` 模拟真实浏览器输入 |
-| 主动招新扫描 | 主 Agent 通过 `discord-recruit` Skill 操作浏览器 |
+| **主动招新（指定节点）** | `discord_recruit` 工具，在指定 bot 节点上开独立 Tab 执行 |
 | 私聊独立 LLM | 直接调用 `/v1/chat/completions`（可按 bot 配置不同端点）|
 | 自定义 System Prompt | 全局默认 + 可按 bot 覆盖 |
 | 5 轮后人工接管 | 插件内置，ConversationStore 按 `botId:channelId` 隔离 |
@@ -160,13 +160,38 @@ openclaw gateway restart
 3. 前 N 轮（默认5轮）AI 自动处理
 4. 超过轮数后发送接管通知并停止
 
-### 主动招新
+### 主动招新（指定 bot 节点）
 
 ```
-在 Discord 服务器 [GUILD_ID] 的 [CHANNEL_ID] 频道里找活跃用户发招新消息
+用 bot-node2 在服务器 [GUILD_ID] 的 [CHANNEL_ID] 频道里找5个活跃用户发招新消息
 ```
 
-主 Agent 使用浏览器 Skill 操作**本机**浏览器发送招新 DM（目前 Skill 使用本地浏览器）。
+调用 `discord_recruit` 工具，指定 `botId`，插件会在该 bot 对应节点的 Chrome 上**开启独立 Tab**，自动完成：扫描在线成员 → 逐个打开 DM → 发送招新话术 → 关闭 Tab，不影响该 bot 的 DM 自动回复轮询。
+
+工具参数：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `botId` | 多 bot 时必填 | 要使用的 bot ID（由 `discord_bots_list` 查询）|
+| `guildId` | ✅ | Discord 服务器 ID |
+| `channelId` | ✅ | 目标频道 ID |
+| `count` | 可选 | 本次联系人数（默认 5，最大 10）|
+| `message` | 可选 | 自定义话术；省略则轮换内置 Gami 模板 |
+
+返回示例：
+
+```json
+{
+  "botId": "bot-node2",
+  "guildId": "123456789",
+  "channelId": "987654321",
+  "contacted": ["PlayerA", "PlayerB", "PlayerC"],
+  "skipped": ["PlayerD: Message button not found in popup"],
+  "errors": []
+}
+```
+
+**注意**：工具在两条 DM 之间自动等待 15–45 秒，单次最多 10 条，符合反检测要求。
 
 ### 查看某 bot 的对话状态
 

@@ -398,6 +398,98 @@ function buildGetMessagesJS(lastSeenId: string): string {
 })(${escaped})`;
 }
 
+// ── Discord DOM helpers (recruitment) ────────────────────────────────────────
+
+/** Returns display names of online/idle non-bot members visible in the member list. */
+const GET_ONLINE_MEMBERS_JS = `
+(function () {
+  try {
+    var results = [];
+    var listEl = document.querySelector('[data-list-id="members"]');
+    if (!listEl) return results;
+    var items = Array.from(listEl.querySelectorAll('[class*="member_"]'));
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item.querySelector('[class*="botTag"]')) continue;
+      var statusEl = item.querySelector('[class*="status_"]');
+      if (!statusEl) continue;
+      var classes = statusEl.getAttribute('class') || '';
+      if (!/(online|idle)/i.test(classes)) continue;
+      var nameEl = item.querySelector('[class*="nick_"]') ||
+                   item.querySelector('[class*="roleColor_"]') ||
+                   item.querySelector('[class*="username_"]');
+      if (!nameEl) continue;
+      var name = nameEl.textContent.trim();
+      if (name) results.push(name);
+    }
+    return results;
+  } catch (e) { return []; }
+})()`;
+
+/** Tries to open the member list sidebar if not visible. */
+const ENSURE_MEMBER_LIST_JS = `
+(function () {
+  if (document.querySelector('[data-list-id="members"]')) return 'already-open';
+  var btn = document.querySelector('[aria-label="Show Member List"]') ||
+            document.querySelector('[aria-label="Members"]');
+  if (btn) { btn.click(); return 'opened'; }
+  return 'not-found';
+})()`;
+
+/** Clicks a member by display name. Returns 'clicked' | 'not-found' | 'no-list'. */
+function buildClickMemberJS(name: string): string {
+  return `
+(function (targetName) {
+  try {
+    var listEl = document.querySelector('[data-list-id="members"]');
+    if (!listEl) return 'no-list';
+    var items = Array.from(listEl.querySelectorAll('[class*="member_"]'));
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var nameEl = item.querySelector('[class*="nick_"]') ||
+                   item.querySelector('[class*="roleColor_"]') ||
+                   item.querySelector('[class*="username_"]');
+      if (nameEl && nameEl.textContent.trim() === targetName) {
+        nameEl.click();
+        return 'clicked';
+      }
+    }
+    return 'not-found';
+  } catch (e) { return 'error:' + e.message; }
+})(${JSON.stringify(name)})`;
+}
+
+/** Clicks the "Send Message" button in the user profile popup. */
+const CLICK_DM_BUTTON_JS = `
+(function () {
+  try {
+    var btn = document.querySelector('[aria-label^="Send a message to"]') ||
+              document.querySelector('[aria-label="Send Message"]');
+    if (!btn) {
+      var popouts = document.querySelectorAll('[class*="userPopout_"], [class*="popout_"]');
+      for (var pi = 0; pi < popouts.length; pi++) {
+        var btns = popouts[pi].querySelectorAll('button');
+        for (var bi = 0; bi < btns.length; bi++) {
+          if (/message/i.test(btns[bi].getAttribute('aria-label') || '') ||
+              /message/i.test(btns[bi].textContent)) {
+            btn = btns[bi]; break;
+          }
+        }
+        if (btn) break;
+      }
+    }
+    if (btn) { btn.click(); return true; }
+    return false;
+  } catch (e) { return false; }
+})()`;
+
+/** Returns the DM channel ID if currently in a @me DM, otherwise null. */
+const GET_DM_CHANNEL_ID_JS = `
+(function () {
+  var m = location.href.match(/\\/channels\\/@me\\/(\\d+)/);
+  return m ? m[1] : null;
+})()`;
+
 // ── CDP URL helper ────────────────────────────────────────────────────────────
 
 /**
@@ -595,37 +687,7 @@ class DiscordBrowserPoller {
       });
       await sleep(1800);
     }
-
-    const focused = (await sess.evaluate(`
-      (function () {
-        var box = document.querySelector('[role="textbox"][contenteditable]');
-        if (!box) return false;
-        box.click(); box.focus(); return true;
-      })()`)) as boolean;
-
-    if (!focused) {
-      console.warn(`${this.tag} Could not focus message box in ${channelId}`);
-      return;
-    }
-
-    await sleep(150);
-    await sess.send("Input.insertText", { text });
-    await sleep(200);
-    await sess.send("Input.dispatchKeyEvent", {
-      type: "keyDown",
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await sess.send("Input.dispatchKeyEvent", {
-      type: "keyUp",
-      key: "Enter",
-      code: "Enter",
-      windowsVirtualKeyCode: 13,
-      nativeVirtualKeyCode: 13,
-    });
-    await sleep(400);
+    await sendMessageRaw(sess, this.tag, text);
   }
 }
 
@@ -633,6 +695,176 @@ class DiscordBrowserPoller {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Type a message into the focused Discord text box and press Enter.
+ * Caller is responsible for ensuring the right channel is open.
+ */
+async function sendMessageRaw(sess: CDPSession, tag: string, text: string): Promise<void> {
+  const focused = (await sess.evaluate(`
+    (function () {
+      var box = document.querySelector('[role="textbox"][contenteditable]');
+      if (!box) return false;
+      box.click(); box.focus(); return true;
+    })()`)) as boolean;
+
+  if (!focused) {
+    console.warn(`${tag} Could not focus message box`);
+    return;
+  }
+
+  await sleep(150);
+  await sess.send("Input.insertText", { text });
+  await sleep(200);
+  await sess.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13,
+  });
+  await sess.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13,
+  });
+  await sleep(400);
+}
+
+// ── Recruitment templates ─────────────────────────────────────────────────────
+
+const RECRUIT_MESSAGE_TEMPLATES = [
+  "嗨！👋 我是 Gami 平台的招募专员。\n\nGami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团队。\n\n✨ 灵活接单 | 公平分成 | 活跃社区\n\n有兴趣了解的话欢迎回复我！🎮",
+  "你好～ 我在帮 Gami 陪玩平台招募有游戏热情的小伙伴。\n\n平台灵活、收益透明，很适合喜欢游戏的玩家 😊\n\n感兴趣可以聊聊～",
+  "嗨！在找喜欢游戏的小伙伴加入 Gami 陪玩团队～\n\n灵活接单，按时结算，多游戏品类都有 🎮\n\n有兴趣可以了解一下！",
+];
+
+// ── Recruitment session ───────────────────────────────────────────────────────
+
+interface RecruitResult {
+  botId: string;
+  guildId: string;
+  channelId: string;
+  contacted: string[];
+  skipped: string[];
+  errors: string[];
+}
+
+/**
+ * Open a dedicated Chrome tab on the specified bot's node, navigate to the
+ * target guild channel, find online/idle members, and send each a DM.
+ * The tab is closed when the session ends (success or error).
+ */
+async function runRecruitSession(
+  botCfg: ResolvedBotConfig,
+  guildId: string,
+  channelId: string,
+  count: number,
+  customMessage?: string
+): Promise<RecruitResult> {
+  const tag = `[gami-recruit:${botCfg.id}]`;
+  const contacted: string[] = [];
+  const skipped: string[] = [];
+  const errors: string[] = [];
+
+  const channelUrl = `https://discord.com/channels/${guildId}/${channelId}`;
+
+  // Open a dedicated tab so we don't disrupt the DM poller's existing tab.
+  const newTabResp = await fetch(
+    `http://${botCfg.cdpHost}:${botCfg.cdpPort}/json/new?${encodeURIComponent(channelUrl)}`
+  );
+  if (!newTabResp.ok) {
+    throw new Error(`${tag} Could not open new tab: HTTP ${newTabResp.status}`);
+  }
+  const newTab = (await newTabResp.json()) as CDPTab;
+  await sleep(3500);
+
+  const wsUrl = rewriteWsHost(newTab.webSocketDebuggerUrl, botCfg.cdpHost);
+  const sess = new CDPSession();
+  await sess.connect(wsUrl);
+
+  try {
+    // Ensure member list sidebar is visible.
+    await sess.evaluate(ENSURE_MEMBER_LIST_JS);
+    await sleep(1500);
+
+    const members = ((await sess.evaluate(GET_ONLINE_MEMBERS_JS)) ?? []) as string[];
+    console.log(`${tag} Found ${members.length} online/idle members`);
+
+    if (members.length === 0) {
+      skipped.push("No online/idle members found in member list");
+      return { botId: botCfg.id, guildId, channelId, contacted, skipped, errors };
+    }
+
+    const targets = members.slice(0, count);
+
+    for (let i = 0; i < targets.length; i++) {
+      const memberName = targets[i];
+      try {
+        // Return to the guild channel before each click.
+        if (i > 0) {
+          await sess.send("Page.navigate", { url: channelUrl });
+          await sleep(2500);
+          await sess.evaluate(ENSURE_MEMBER_LIST_JS);
+          await sleep(1000);
+        }
+
+        // Click the member to open their profile popup.
+        const clickResult = (await sess.evaluate(buildClickMemberJS(memberName))) as string;
+        if (clickResult !== "clicked") {
+          skipped.push(`${memberName}: could not click (${clickResult})`);
+          continue;
+        }
+        await sleep(1000);
+
+        // Click the "Send Message" button in the popup.
+        const dmClicked = (await sess.evaluate(CLICK_DM_BUTTON_JS)) as boolean;
+        if (!dmClicked) {
+          skipped.push(`${memberName}: Message button not found in popup`);
+          // Dismiss popup.
+          await sess.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape" });
+          await sess.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape" });
+          continue;
+        }
+        await sleep(1800);
+
+        // Confirm we navigated into a DM channel.
+        const dmChannelId = (await sess.evaluate(GET_DM_CHANNEL_ID_JS)) as string | null;
+        if (!dmChannelId) {
+          skipped.push(`${memberName}: DM window did not open`);
+          continue;
+        }
+
+        // Pick message text (rotate templates to avoid identical messages).
+        const message =
+          customMessage ?? RECRUIT_MESSAGE_TEMPLATES[i % RECRUIT_MESSAGE_TEMPLATES.length];
+
+        await sendMessageRaw(sess, tag, message);
+        contacted.push(memberName);
+        console.log(`${tag} Sent DM to "${memberName}" (${i + 1}/${targets.length})`);
+
+        // Anti-detection delay between DMs (15–45 s).
+        if (i < targets.length - 1) {
+          const pause = 15000 + Math.floor(Math.random() * 30000);
+          console.log(`${tag} Pausing ${Math.round(pause / 1000)}s before next DM...`);
+          await sleep(pause);
+        }
+      } catch (e) {
+        errors.push(`${memberName}: ${(e as Error).message}`);
+      }
+    }
+  } finally {
+    sess.close();
+    // Close the recruitment tab.
+    await fetch(
+      `http://${botCfg.cdpHost}:${botCfg.cdpPort}/json/close/${newTab.id}`
+    ).catch(() => {});
+  }
+
+  return { botId: botCfg.id, guildId, channelId, contacted, skipped, errors };
 }
 
 // ── Config resolution ─────────────────────────────────────────────────────────
@@ -789,6 +1021,110 @@ export default function register(api: PluginApi) {
             },
           ],
         };
+      },
+    },
+    { optional: true }
+  );
+
+  // ── Tool: discord_recruit ─────────────────────────────────────────────────
+  api.registerTool(
+    {
+      name: "discord_recruit",
+      description:
+        "Send outbound recruitment DMs to active members in a Discord server channel, " +
+        "using a specific bot's browser session on its designated OpenClaw node. " +
+        "The bot navigates to the channel, finds online/idle members, opens each DM, " +
+        "and sends a recruitment message. " +
+        "Use discord_bots_list to see available bot IDs and their nodes.",
+      parameters: {
+        type: "object",
+        properties: {
+          botId: {
+            type: "string",
+            description:
+              "Bot ID whose node/browser to use for recruitment. " +
+              "Omit when only one bot is configured; use discord_bots_list to see options.",
+          },
+          guildId: {
+            type: "string",
+            description: "Discord server (guild) ID to recruit from.",
+          },
+          channelId: {
+            type: "string",
+            description: "Channel ID within the guild to find active members.",
+          },
+          count: {
+            type: "number",
+            description: "Number of users to contact in this session (default: 5, max: 10).",
+          },
+          message: {
+            type: "string",
+            description:
+              "Custom recruitment message. Omit to rotate through built-in Gami templates.",
+          },
+        },
+        required: ["guildId", "channelId"],
+      },
+      async execute(_id, params) {
+        const guildId = params.guildId as string;
+        const channelId = params.channelId as string;
+        const count = Math.min(Math.max(1, (params.count as number | undefined) ?? 5), 10);
+        const customMessage = params.message as string | undefined;
+
+        const raw = resolvePluginConfig(api);
+        const bots = resolveBotConfigs(raw);
+        const botId =
+          (params.botId as string | undefined) ?? (bots.length === 1 ? bots[0].id : undefined);
+
+        if (!botId) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: "Multiple bots configured — please specify botId.",
+                  availableBots: bots.map((b) => ({ id: b.id, label: b.label, node: `${b.cdpHost}:${b.cdpPort}` })),
+                }),
+              },
+            ],
+          };
+        }
+
+        const botCfg = bots.find((b) => b.id === botId);
+        if (!botCfg) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: `Bot "${botId}" not found in config.`,
+                  availableBots: bots.map((b) => b.id),
+                }),
+              },
+            ],
+          };
+        }
+
+        try {
+          const result = await runRecruitSession(botCfg, guildId, channelId, count, customMessage);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          };
+        } catch (e) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: (e as Error).message,
+                  botId,
+                  guildId,
+                  channelId,
+                }),
+              },
+            ],
+          };
+        }
       },
     },
     { optional: true }

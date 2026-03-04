@@ -46,12 +46,26 @@ Gami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团
 感兴趣可以聊聊～
 ```
 
-## 会话管理工具
+## Agent 工具
 
 | 工具 | 用途 |
 |------|------|
-| `discord_dm_status channelId` | 查看某 DM 频道的当前轮数和接管状态 |
-| `discord_dm_reset channelId` | 人工客服跟进完毕后，重置轮数以重新启用 AI |
+| `discord_bots_list` | 查看所有已配置的 bot 及其节点地址、运行状态 |
+| `discord_recruit botId guildId channelId count` | **在指定 bot 的节点上**执行主动招新：找到在线成员并发送 DM |
+| `discord_dm_status botId channelId` | 查看某 DM 频道的当前轮数和接管状态 |
+| `discord_dm_reset botId channelId` | 人工客服跟进完毕后，重置轮数以重新启用 AI |
+
+### discord_recruit 工具说明
+
+当收到类似 **"在服务器 X 的频道 Y 找活跃用户发招新"** 的指令时，优先使用 `discord_recruit` 工具而非手动操作浏览器。
+
+**指定节点的示例：**
+
+> "用 bot-node2 在服务器 123456789 的 987654321 频道里给5个活跃用户发招新消息"
+
+→ 调用 `discord_recruit`，参数：`botId: "bot-node2"`, `guildId: "123456789"`, `channelId: "987654321"`, `count: 5`
+
+工具会在 `bot-node2` 对应节点的浏览器上完成整个操作（打开独立 Tab → 扫描成员 → 逐个发 DM → 返回结果报告），不会影响该 bot 的 DM 自动回复轮询。
 
 ## 操作注意事项
 

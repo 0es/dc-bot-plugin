@@ -6,17 +6,71 @@ metadata: {"openclaw": {"requires": {"config": ["browser.enabled"]}, "os": ["dar
 
 # Discord Outbound Recruitment via Browser
 
-Use OpenClaw's managed browser to navigate Discord web and send recruitment messages to users for Gami.
+Send recruitment messages to active members in a Discord server channel on behalf of Gami.
 
 **Important:** This skill handles **outbound** recruitment only (finding users and sending the first message). Once a user replies, the plugin's CDP polling loop takes over the conversation automatically — you do not need to monitor or reply to DMs.
 
-## Prerequisites
+---
+
+## Which approach to use?
+
+| Scenario | Recommended approach |
+|----------|---------------------|
+| Recruit using a **specific bot / OpenClaw node** | Use the `discord_recruit` **agent tool** (see below) |
+| Recruit using the **local browser** only | Follow the manual browser steps further below |
+
+---
+
+## Approach A — `discord_recruit` tool (recommended)
+
+Use this when you want to target a specific bot whose browser session lives on a remote OpenClaw node.
+
+### Step 1 — Check available bots
+
+```
+List all Discord bots and their nodes
+```
+
+Calls `discord_bots_list`. Note the `id` of the bot whose node you want to use.
+
+### Step 2 — Call `discord_recruit`
+
+Parameters:
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `botId` | Yes (if multiple bots) | Bot ID from `discord_bots_list` |
+| `guildId` | Yes | Discord server ID |
+| `channelId` | Yes | Channel to scan for active members |
+| `count` | No | How many users to contact (default 5, max 10) |
+| `message` | No | Custom DM text; omit to rotate built-in Gami templates |
+
+**Example:**
+
+> "用 bot-node2 在服务器 123456789 的 987654321 频道里给 5 个活跃用户发招新消息"
+
+This will:
+1. Open a new Chrome tab on `bot-node2`'s node
+2. Navigate to the channel, find online/idle members
+3. Click each member → open DM → send the message
+4. Return a report: `{ contacted, skipped, errors }`
+
+### Rate limit reminder
+
+- Max **10 DMs per session** (enforced by the `count` cap)
+- The tool automatically waits **15–45 seconds** between DMs
+- Do not run multiple sessions for the same bot within an hour
+
+---
+
+## Approach B — Manual browser steps (local bot only)
+
+Use the managed browser tools when you want to operate the **local** Discord account directly (no `botId` targeting).
+
+### Prerequisites
 
 - Managed browser running and logged into Discord (`browser.enabled: true`).
-- The plugin is running (check: `openclaw plugins list` shows `gami-discord-recruit` enabled).
-- You need: Guild ID (server ID) and Channel ID to recruit from.
-
-## Recruitment Steps
+- You need: Guild ID and Channel ID to recruit from.
 
 ### Step 1 — Navigate to the target channel
 
@@ -82,12 +136,3 @@ After completing a session, summarise:
 - Number of users contacted and their usernames (for deduplication tracking)
 - Any warnings or errors
 - Recommended wait time before next session
-
-## Example usage
-
-> "在 Discord 服务器 123456789 的 987654321 频道里找5个活跃用户发招新消息"
-
-1. Navigate to `https://discord.com/channels/123456789/987654321`
-2. Identify 5 active members
-3. Send personalised DMs with appropriate delays
-4. Report back with usernames contacted
