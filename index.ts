@@ -2,39 +2,94 @@
  * Gami Discord Recruitment Plugin for OpenClaw
  *
  * All Discord communication is done through the managed browser via CDP —
- * no Discord bot token or Bot API is used. The plugin:
+ * no Discord bot token or Bot API is used.
  *
- * 1. Polls Discord web (via Chrome DevTools Protocol) for new DMs.
- * 2. Calls the configured local LLM endpoint directly for each response.
- * 3. Sends replies by typing into the Discord web message box via CDP.
- * 4. Enforces a per-conversation turn limit; hands over to human after N turns.
+ * Supports multiple bots running in parallel, each on its own OpenClaw node
+ * (or the local machine). Each bot has its own:
+ *   - Chrome browser session (accessed via CDP)
+ *   - Discord account (already logged in)
+ *   - Conversation state store
+ *   - Optional per-bot LLM / turn-limit overrides
  *
- * Exposes two agent tools:
- *   - discord_dm_reset  — re-enable AI for a conversation after human finishes
- *   - discord_dm_status — inspect current turn count for a channel
+ * Configuration:
+ *   plugins.entries.gami-discord-recruit.config.bots = [{ id, cdpHost, cdpPort, ... }]
+ *
+ * If `bots` is omitted, the plugin runs in single-bot mode using the
+ * top-level cdpPort / cdpHost values (backward compatible).
+ *
+ * Agent tools:
+ *   discord_bots_list  — list all configured bots and their status
+ *   discord_dm_reset   — re-enable AI for a conversation after human finishes
+ *   discord_dm_status  — inspect turn count / handover state for a channel
  */
 
 import WebSocket from "ws";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+/** Per-bot configuration; all fields except `id` are optional overrides. */
+interface BotConfig {
+  /** Unique identifier for this bot instance (used in tool calls and logs). */
+  id: string;
+  /** Human-readable label shown in logs and tool responses. */
+  label?: string;
+  /**
+   * Hostname or IP of the OpenClaw node running this bot's browser.
+   * Use "127.0.0.1" for the local machine (default).
+   */
+  cdpHost?: string;
+  /** Chrome DevTools Protocol port on the node. Default: 18800 */
+  cdpPort?: number;
+  // ── Per-bot overrides for global settings ──
+  maxDmTurns?: number;
+  takeoverMessage?: string;
+  systemPrompt?: string;
+  llmBaseUrl?: string;
+  llmModel?: string;
+  llmApiKey?: string;
+}
+
+/** Top-level plugin configuration (all fields optional). */
 interface PluginConfig {
+  // ── Global defaults (used by all bots unless overridden) ──
   /** Max AI turns before human takeover. Default: 5 */
   maxDmTurns?: number;
   /** Message sent to user on handover. */
   takeoverMessage?: string;
   /** How often to poll Discord for new DMs (ms). Default: 5000 */
   pollIntervalMs?: number;
-  /** Chrome DevTools Protocol port for the openclaw browser profile. Default: 18800 */
+  /** Default CDP host for single-bot / fallback mode. Default: "127.0.0.1" */
+  cdpHost?: string;
+  /** Default CDP port for single-bot / fallback mode. Default: 18800 */
   cdpPort?: number;
   /** Base URL for the OpenAI-compatible LLM. Default: http://192.168.8.201:8080/v1 */
   llmBaseUrl?: string;
-  /** Model name to send to the LLM endpoint. Default: "default" */
+  /** Model name sent to the LLM endpoint. Default: "default" */
   llmModel?: string;
-  /** API key for the LLM endpoint (optional). Default: "not-required" */
+  /** API key for the LLM endpoint. Default: "not-required" */
   llmApiKey?: string;
-  /** System prompt injected at the start of every new DM conversation. */
+  /** System prompt for new DM conversations. */
   systemPrompt?: string;
+  /**
+   * Multi-bot definitions.
+   * If omitted, runs in single-bot mode using the global fields above.
+   */
+  bots?: BotConfig[];
+}
+
+/** Fully-resolved configuration for one bot (no optional fields). */
+interface ResolvedBotConfig {
+  id: string;
+  label: string;
+  cdpHost: string;
+  cdpPort: number;
+  pollIntervalMs: number;
+  maxDmTurns: number;
+  takeoverMessage: string;
+  systemPrompt: string;
+  llmBaseUrl: string;
+  llmModel: string;
+  llmApiKey: string;
 }
 
 interface PluginApi {
@@ -86,6 +141,7 @@ interface UnreadDM {
 const DEFAULTS = {
   maxDmTurns: 5,
   pollIntervalMs: 5000,
+  cdpHost: "127.0.0.1",
   cdpPort: 18800,
   llmBaseUrl: "http://192.168.8.201:8080/v1",
   llmModel: "default",
@@ -144,7 +200,7 @@ class CDPSession {
             else resolve(msg.result);
           }
         } catch {
-          // ignore parse errors from CDP events
+          // ignore CDP event frames without id
         }
       });
     });
@@ -181,6 +237,7 @@ class CDPSession {
 }
 
 // ── Conversation Store ────────────────────────────────────────────────────────
+// Key format: "${botId}:${channelId}" — isolates each bot's conversations.
 
 interface Conversation {
   history: ChatMessage[];
@@ -192,48 +249,61 @@ interface Conversation {
 class ConversationStore {
   private store = new Map<string, Conversation>();
 
-  get(channelId: string): Conversation {
-    if (!this.store.has(channelId)) {
-      this.store.set(channelId, {
-        history: [],
-        turns: 0,
-        handedOver: false,
-        lastSeenMsgId: "",
-      });
-    }
-    return this.store.get(channelId)!;
+  private key(botId: string, channelId: string): string {
+    return `${botId}:${channelId}`;
   }
 
-  addUserMessage(channelId: string, content: string, systemPrompt: string) {
-    const conv = this.get(channelId);
+  get(botId: string, channelId: string): Conversation {
+    const k = this.key(botId, channelId);
+    if (!this.store.has(k)) {
+      this.store.set(k, { history: [], turns: 0, handedOver: false, lastSeenMsgId: "" });
+    }
+    return this.store.get(k)!;
+  }
+
+  addUserMessage(botId: string, channelId: string, content: string, systemPrompt: string) {
+    const conv = this.get(botId, channelId);
     if (conv.history.length === 0 && systemPrompt) {
       conv.history.push({ role: "system", content: systemPrompt });
     }
     conv.history.push({ role: "user", content });
   }
 
-  addAssistantMessage(channelId: string, content: string) {
-    const conv = this.get(channelId);
+  addAssistantMessage(botId: string, channelId: string, content: string) {
+    const conv = this.get(botId, channelId);
     conv.history.push({ role: "assistant", content });
     conv.turns++;
   }
 
-  reset(channelId: string) {
-    this.store.delete(channelId);
+  reset(botId: string, channelId: string) {
+    this.store.delete(this.key(botId, channelId));
   }
 
-  summary(channelId: string): { turns: number; handedOver: boolean } {
-    const conv = this.get(channelId);
+  summary(botId: string, channelId: string): { turns: number; handedOver: boolean } {
+    const conv = this.get(botId, channelId);
     return { turns: conv.turns, handedOver: conv.handedOver };
+  }
+
+  /** List all active conversations for a given bot. */
+  listForBot(botId: string): Array<{ channelId: string; turns: number; handedOver: boolean }> {
+    const prefix = `${botId}:`;
+    const results: Array<{ channelId: string; turns: number; handedOver: boolean }> = [];
+    for (const [k, conv] of this.store) {
+      if (k.startsWith(prefix)) {
+        results.push({
+          channelId: k.slice(prefix.length),
+          turns: conv.turns,
+          handedOver: conv.handedOver,
+        });
+      }
+    }
+    return results;
   }
 }
 
 // ── LLM Client ────────────────────────────────────────────────────────────────
 
-async function callLLM(
-  messages: ChatMessage[],
-  cfg: Required<PluginConfig>
-): Promise<string> {
+async function callLLM(messages: ChatMessage[], cfg: ResolvedBotConfig): Promise<string> {
   const res = await fetch(`${cfg.llmBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -259,29 +329,22 @@ async function callLLM(
   return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
-// ── Discord DOM helpers (evaluated inside the browser page) ──────────────────
+// ── Discord DOM helpers ───────────────────────────────────────────────────────
 
-/**
- * Returns a list of DM channels that have an unread indicator.
- * Evaluated inside the Discord tab via Runtime.evaluate.
- */
 const GET_UNREAD_DMS_JS = `
 (function () {
   try {
     var results = [];
-    // DM sidebar can be keyed by aria-label or data-list-id
     var sidebar =
       document.querySelector('[aria-label="Direct Messages"]') ||
       document.querySelector('[data-list-id="private-channels"]');
     if (!sidebar) return results;
-
     var links = sidebar.querySelectorAll('a[href*="/channels/@me/"]');
     for (var i = 0; i < links.length; i++) {
       var link = links[i];
       var m = link.href.match(/\\/channels\\/@me\\/(\\d+)/);
       if (!m) continue;
       var channelId = m[1];
-      // Unread badge: Discord adds a small badge element for unread counts
       var badge =
         link.querySelector('[class*="numberBadge"]') ||
         link.querySelector('[class*="unreadBadge"]') ||
@@ -289,23 +352,14 @@ const GET_UNREAD_DMS_JS = `
       if (!badge) continue;
       var label =
         link.getAttribute('aria-label') ||
-        (link.querySelector('[class*="name"]') || {}).textContent ||
+        ((link.querySelector('[class*="name"]') || {}).textContent) ||
         channelId;
       results.push({ channelId: channelId, label: label.trim() });
     }
     return results;
-  } catch (e) {
-    return [];
-  }
-})()
-`;
+  } catch (e) { return []; }
+})()`;
 
-/**
- * Returns messages in the current channel that appear after lastSeenId.
- * If lastSeenId is empty, returns only the last visible message (to avoid
- * replying to old backlog on first run).
- * Evaluated inside the Discord tab via Runtime.evaluate.
- */
 function buildGetMessagesJS(lastSeenId: string): string {
   const escaped = JSON.stringify(lastSeenId);
   return `
@@ -314,10 +368,7 @@ function buildGetMessagesJS(lastSeenId: string): string {
     var results = [];
     var list = document.querySelector('[data-list-id="chat-messages"]');
     if (!list) return results;
-
     var items = Array.from(list.querySelectorAll('li[id^="chat-messages-"]'));
-
-    // First run (no lastSeenId): just record the latest message id without returning content
     if (!lastSeenId) {
       var last = items[items.length - 1];
       if (!last) return results;
@@ -325,38 +376,38 @@ function buildGetMessagesJS(lastSeenId: string): string {
       if (idm) results.push({ id: idm[1], author: '__INIT__', content: '' });
       return results;
     }
-
     var found = false;
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
       var idMatch = item.id.match(/chat-messages-\\d+-(\\d+)/);
       if (!idMatch) continue;
       var msgId = idMatch[1];
-
-      if (!found) {
-        if (msgId === lastSeenId) found = true;
-        continue;
-      }
-
+      if (!found) { if (msgId === lastSeenId) found = true; continue; }
       var contentEl = item.querySelector('[id^="message-content-"]');
       var content = (contentEl || {}).textContent;
       if (!content || !content.trim()) continue;
-
-      // Get author from message header (only present on first message of a group)
       var headerEl = item.querySelector('[class*="header"]');
       var authorEl = headerEl
         ? headerEl.querySelector('[class*="username"], [class*="nameTag"], h3 span')
         : null;
       var author = authorEl ? authorEl.textContent.trim() : '__continued__';
-
       results.push({ id: msgId, author: author, content: content.trim() });
     }
     return results;
-  } catch (e) {
-    return [];
-  }
-})(${escaped})
-`;
+  } catch (e) { return []; }
+})(${escaped})`;
+}
+
+// ── CDP URL helper ────────────────────────────────────────────────────────────
+
+/**
+ * Chrome's CDP /json listing reports WebSocket URLs as ws://localhost:PORT/...
+ * even when running on a remote machine.  We replace the host part so that our
+ * WebSocket connection goes to the actual node IP instead of localhost.
+ */
+function rewriteWsHost(wsUrl: string, cdpHost: string): string {
+  if (cdpHost === "127.0.0.1" || cdpHost === "localhost") return wsUrl;
+  return wsUrl.replace(/^(ws:\/\/)(localhost|127\.0\.0\.1)/, `$1${cdpHost}`);
 }
 
 // ── Discord Browser Poller ────────────────────────────────────────────────────
@@ -364,23 +415,25 @@ function buildGetMessagesJS(lastSeenId: string): string {
 class DiscordBrowserPoller {
   private session: CDPSession | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
-  /** Channels currently being processed to avoid concurrent replies */
   private processing = new Set<string>();
-  /** Track the bot's own display name to skip self-messages */
   private selfName: string | null = null;
+  private readonly tag: string;
 
   constructor(
-    private store: ConversationStore,
-    private cfg: Required<PluginConfig>
-  ) {}
+    private readonly botCfg: ResolvedBotConfig,
+    private readonly store: ConversationStore
+  ) {
+    this.tag = `[gami-discord:${botCfg.id}]`;
+  }
 
   start() {
-    console.log("[gami-discord] Browser poller starting (CDP port:", this.cfg.cdpPort, ")");
-    // Run once immediately, then on interval
-    this.poll().catch((e) => console.error("[gami-discord] Initial poll error:", e));
+    console.log(
+      `${this.tag} Starting poller — node ${this.botCfg.cdpHost}:${this.botCfg.cdpPort}`
+    );
+    this.poll().catch((e) => console.error(`${this.tag} Initial poll error:`, e));
     this.timer = setInterval(() => {
-      this.poll().catch((e) => console.error("[gami-discord] Poll error:", e));
-    }, this.cfg.pollIntervalMs);
+      this.poll().catch((e) => console.error(`${this.tag} Poll error:`, e));
+    }, this.botCfg.pollIntervalMs);
   }
 
   stop() {
@@ -388,12 +441,13 @@ class DiscordBrowserPoller {
     this.timer = null;
     this.session?.close();
     this.session = null;
-    console.log("[gami-discord] Browser poller stopped.");
+    console.log(`${this.tag} Stopped.`);
   }
+
+  // ── Internal ─────────────────────────────────────────────────────────────
 
   private async getSession(): Promise<CDPSession> {
     if (this.session?.isOpen()) {
-      // Ping to confirm it's still alive
       try {
         await this.session.evaluate("1");
         return this.session;
@@ -407,35 +461,34 @@ class DiscordBrowserPoller {
     let discordTab = tabs.find((t) => t.url.includes("discord.com"));
 
     if (!discordTab) {
-      console.log("[gami-discord] No Discord tab found — opening discord.com/channels/@me");
+      console.log(`${this.tag} No Discord tab — opening discord.com/channels/@me`);
       discordTab = await this.openNewTab("https://discord.com/channels/@me");
-      // Give the page time to load before connecting
       await sleep(3000);
-      // Re-fetch tabs to get the WebSocket debugger URL
       const freshTabs = await this.fetchTabs();
       discordTab = freshTabs.find((t) => t.url.includes("discord.com")) ?? discordTab;
     }
 
     if (!discordTab?.webSocketDebuggerUrl) {
-      throw new Error("Could not get Discord tab CDP WebSocket URL");
+      throw new Error(`${this.tag} Could not get CDP WebSocket URL for Discord tab`);
     }
 
+    const wsUrl = rewriteWsHost(discordTab.webSocketDebuggerUrl, this.botCfg.cdpHost);
     const sess = new CDPSession();
-    await sess.connect(discordTab.webSocketDebuggerUrl);
+    await sess.connect(wsUrl);
     this.session = sess;
     return sess;
   }
 
   private async fetchTabs(): Promise<CDPTab[]> {
-    const res = await fetch(`http://127.0.0.1:${this.cfg.cdpPort}/json`);
-    if (!res.ok) throw new Error(`CDP HTTP error: ${res.status}`);
+    const url = `http://${this.botCfg.cdpHost}:${this.botCfg.cdpPort}/json`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`CDP HTTP ${res.status} from ${url}`);
     return (await res.json()) as CDPTab[];
   }
 
-  private async openNewTab(url: string): Promise<CDPTab> {
-    const res = await fetch(
-      `http://127.0.0.1:${this.cfg.cdpPort}/json/new?${encodeURIComponent(url)}`
-    );
+  private async openNewTab(pageUrl: string): Promise<CDPTab> {
+    const url = `http://${this.botCfg.cdpHost}:${this.botCfg.cdpPort}/json/new?${encodeURIComponent(pageUrl)}`;
+    const res = await fetch(url);
     return (await res.json()) as CDPTab;
   }
 
@@ -444,11 +497,10 @@ class DiscordBrowserPoller {
     try {
       sess = await this.getSession();
     } catch (e) {
-      console.warn("[gami-discord] Browser not reachable:", (e as Error).message);
+      console.warn(`${this.tag} Browser not reachable:`, (e as Error).message);
       return;
     }
 
-    // Read self name once (to skip our own messages)
     if (!this.selfName) {
       this.selfName = (await sess.evaluate(
         `(document.querySelector('[class*="nameTag"] [class*="username"], [aria-label*="Logged in as"] strong') || {}).textContent || null`
@@ -456,7 +508,6 @@ class DiscordBrowserPoller {
     }
 
     const unread = ((await sess.evaluate(GET_UNREAD_DMS_JS)) ?? []) as UnreadDM[];
-
     for (const dm of unread) {
       if (this.processing.has(dm.channelId)) continue;
       this.processing.add(dm.channelId);
@@ -466,7 +517,6 @@ class DiscordBrowserPoller {
 
   private async handleDM(sess: CDPSession, dm: UnreadDM) {
     try {
-      // Navigate to the DM channel if needed
       const currentUrl = (await sess.evaluate("location.href")) as string;
       if (!currentUrl.includes(dm.channelId)) {
         await sess.send("Page.navigate", {
@@ -475,19 +525,18 @@ class DiscordBrowserPoller {
         await sleep(1800);
       }
 
-      const conv = this.store.get(dm.channelId);
-      const js = buildGetMessagesJS(conv.lastSeenMsgId);
-      const messages = ((await sess.evaluate(js)) ?? []) as DiscordMessage[];
+      const conv = this.store.get(this.botCfg.id, dm.channelId);
+      const messages = ((await sess.evaluate(buildGetMessagesJS(conv.lastSeenMsgId))) ??
+        []) as DiscordMessage[];
 
       if (messages.length === 0) return;
 
-      // On first visit (init), just record the last seen ID and don't reply
+      // First visit: record anchor message ID and exit without replying
       if (!conv.lastSeenMsgId && messages[0]?.author === "__INIT__") {
         conv.lastSeenMsgId = messages[0].id;
         return;
       }
 
-      // Filter out our own messages and empty/system entries
       const userMessages = messages.filter(
         (m) =>
           m.content &&
@@ -496,50 +545,49 @@ class DiscordBrowserPoller {
           (!this.selfName || !m.author.includes(this.selfName))
       );
 
-      if (userMessages.length === 0) {
-        // Still update lastSeenId to the latest message we saw
-        conv.lastSeenMsgId = messages[messages.length - 1].id;
-        return;
-      }
-
-      // Use the last user message in the batch
-      const userMsg = userMessages[userMessages.length - 1];
       conv.lastSeenMsgId = messages[messages.length - 1].id;
 
-      // Already handed over — remind the user
+      if (userMessages.length === 0) return;
+
+      const userMsg = userMessages[userMessages.length - 1];
+
+      // Already handed over
       if (conv.handedOver) {
-        await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
+        await this.sendMessage(sess, dm.channelId, this.botCfg.takeoverMessage);
         return;
       }
 
-      // Add user message to history
-      this.store.addUserMessage(dm.channelId, userMsg.content, this.cfg.systemPrompt);
+      this.store.addUserMessage(
+        this.botCfg.id,
+        dm.channelId,
+        userMsg.content,
+        this.botCfg.systemPrompt
+      );
 
       // Check turn limit
-      if (conv.turns >= this.cfg.maxDmTurns) {
+      if (conv.turns >= this.botCfg.maxDmTurns) {
         conv.handedOver = true;
-        await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
-        console.log(`[gami-discord] Human takeover triggered for channel ${dm.channelId}`);
+        await this.sendMessage(sess, dm.channelId, this.botCfg.takeoverMessage);
+        console.log(`${this.tag} Human takeover for channel ${dm.channelId}`);
         return;
       }
 
       // Call LLM
-      const reply = await callLLM(conv.history, this.cfg);
+      const reply = await callLLM(conv.history, this.botCfg);
       if (!reply) return;
 
-      this.store.addAssistantMessage(dm.channelId, reply);
+      this.store.addAssistantMessage(this.botCfg.id, dm.channelId, reply);
       await this.sendMessage(sess, dm.channelId, reply);
 
       console.log(
-        `[gami-discord] Replied to ${dm.label} (turn ${conv.turns}/${this.cfg.maxDmTurns})`
+        `${this.tag} Replied to "${dm.label}" — turn ${conv.turns}/${this.botCfg.maxDmTurns}`
       );
     } catch (e) {
-      console.error(`[gami-discord] Error handling DM ${dm.channelId}:`, e);
+      console.error(`${this.tag} Error handling DM ${dm.channelId}:`, e);
     }
   }
 
   private async sendMessage(sess: CDPSession, channelId: string, text: string) {
-    // Ensure we're on the right channel
     const currentUrl = (await sess.evaluate("location.href")) as string;
     if (!currentUrl.includes(channelId)) {
       await sess.send("Page.navigate", {
@@ -548,30 +596,21 @@ class DiscordBrowserPoller {
       await sleep(1800);
     }
 
-    // Focus the message box
     const focused = (await sess.evaluate(`
       (function () {
         var box = document.querySelector('[role="textbox"][contenteditable]');
         if (!box) return false;
-        box.click();
-        box.focus();
-        return true;
-      })()
-    `)) as boolean;
+        box.click(); box.focus(); return true;
+      })()`)) as boolean;
 
     if (!focused) {
-      console.warn("[gami-discord] Could not focus message box in channel", channelId);
+      console.warn(`${this.tag} Could not focus message box in ${channelId}`);
       return;
     }
 
     await sleep(150);
-
-    // Type the message using CDP Input.insertText (works with Discord's Slate editor)
     await sess.send("Input.insertText", { text });
-
     await sleep(200);
-
-    // Press Enter to send
     await sess.send("Input.dispatchKeyEvent", {
       type: "keyDown",
       key: "Enter",
@@ -586,7 +625,6 @@ class DiscordBrowserPoller {
       windowsVirtualKeyCode: 13,
       nativeVirtualKeyCode: 13,
     });
-
     await sleep(400);
   }
 }
@@ -597,40 +635,102 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// ── Config resolution ─────────────────────────────────────────────────────────
+
+function resolvePluginConfig(api: PluginApi): PluginConfig {
+  return (api.config?.plugins?.entries?.["gami-discord-recruit"]?.config as PluginConfig) ?? {};
+}
+
+/**
+ * Merge global defaults → plugin-level config → per-bot overrides
+ * into a list of fully-resolved bot configs.
+ */
+function resolveBotConfigs(raw: PluginConfig): ResolvedBotConfig[] {
+  const global: Required<Omit<ResolvedBotConfig, "id" | "label">> = {
+    cdpHost: raw.cdpHost ?? DEFAULTS.cdpHost,
+    cdpPort: raw.cdpPort ?? DEFAULTS.cdpPort,
+    pollIntervalMs: raw.pollIntervalMs ?? DEFAULTS.pollIntervalMs,
+    maxDmTurns: raw.maxDmTurns ?? DEFAULTS.maxDmTurns,
+    takeoverMessage: raw.takeoverMessage ?? DEFAULTS.takeoverMessage,
+    systemPrompt: raw.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+    llmBaseUrl: raw.llmBaseUrl ?? DEFAULTS.llmBaseUrl,
+    llmModel: raw.llmModel ?? DEFAULTS.llmModel,
+    llmApiKey: raw.llmApiKey ?? DEFAULTS.llmApiKey,
+  };
+
+  if (!raw.bots || raw.bots.length === 0) {
+    // Single-bot fallback: treat global config as one bot
+    return [{ id: "default", label: "Default Bot", ...global }];
+  }
+
+  return raw.bots.map((bot) => ({
+    id: bot.id,
+    label: bot.label ?? bot.id,
+    cdpHost: bot.cdpHost ?? global.cdpHost,
+    cdpPort: bot.cdpPort ?? global.cdpPort,
+    pollIntervalMs: global.pollIntervalMs,
+    maxDmTurns: bot.maxDmTurns ?? global.maxDmTurns,
+    takeoverMessage: bot.takeoverMessage ?? global.takeoverMessage,
+    systemPrompt: bot.systemPrompt ?? global.systemPrompt,
+    llmBaseUrl: bot.llmBaseUrl ?? global.llmBaseUrl,
+    llmModel: bot.llmModel ?? global.llmModel,
+    llmApiKey: bot.llmApiKey ?? global.llmApiKey,
+  }));
+}
+
 // ── Plugin Entry ──────────────────────────────────────────────────────────────
 
 export default function register(api: PluginApi) {
-  const conversations = new ConversationStore();
-  let poller: DiscordBrowserPoller | null = null;
+  const store = new ConversationStore();
+  /** botId → running poller */
+  const pollers = new Map<string, DiscordBrowserPoller>();
 
-  function resolveConfig(): Required<PluginConfig> {
-    const raw =
-      (api.config?.plugins?.entries?.["gami-discord-recruit"]?.config as PluginConfig) ?? {};
-    return {
-      maxDmTurns: raw.maxDmTurns ?? DEFAULTS.maxDmTurns,
-      takeoverMessage: raw.takeoverMessage ?? DEFAULTS.takeoverMessage,
-      pollIntervalMs: raw.pollIntervalMs ?? DEFAULTS.pollIntervalMs,
-      cdpPort: raw.cdpPort ?? DEFAULTS.cdpPort,
-      llmBaseUrl: raw.llmBaseUrl ?? DEFAULTS.llmBaseUrl,
-      llmModel: raw.llmModel ?? DEFAULTS.llmModel,
-      llmApiKey: raw.llmApiKey ?? DEFAULTS.llmApiKey,
-      systemPrompt: raw.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-    };
-  }
-
-  // ── Hook: gateway:startup — kick off the browser polling loop ──────────────
+  // ── Hook: gateway:startup ──────────────────────────────────────────────────
   api.registerHook(
     "gateway:startup",
     async () => {
-      const cfg = resolveConfig();
-      poller = new DiscordBrowserPoller(conversations, cfg);
-      poller.start();
+      const raw = resolvePluginConfig(api);
+      const botConfigs = resolveBotConfigs(raw);
+
+      console.log(`[gami-discord] Starting ${botConfigs.length} bot(s)...`);
+      for (const cfg of botConfigs) {
+        const poller = new DiscordBrowserPoller(cfg, store);
+        pollers.set(cfg.id, poller);
+        poller.start();
+      }
     },
     {
       name: "gami-discord.browser-poller-start",
-      description:
-        "Starts the Discord browser DM polling service when the OpenClaw gateway starts.",
+      description: "Starts one Discord browser DM poller per configured bot on gateway startup.",
     }
+  );
+
+  // ── Tool: discord_bots_list ────────────────────────────────────────────────
+  api.registerTool(
+    {
+      name: "discord_bots_list",
+      description:
+        "List all configured Discord bots, their node addresses, and the number of active conversations.",
+      parameters: { type: "object", properties: {} },
+      async execute(_id, _params) {
+        const raw = resolvePluginConfig(api);
+        const botConfigs = resolveBotConfigs(raw);
+        const result = botConfigs.map((cfg) => ({
+          id: cfg.id,
+          label: cfg.label,
+          node: `${cfg.cdpHost}:${cfg.cdpPort}`,
+          running: pollers.has(cfg.id),
+          maxDmTurns: cfg.maxDmTurns,
+          llmBaseUrl: cfg.llmBaseUrl,
+          llmModel: cfg.llmModel,
+          activeConversations: store.listForBot(cfg.id),
+        }));
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      },
+    },
+    { optional: true }
   );
 
   // ── Tool: discord_dm_reset ─────────────────────────────────────────────────
@@ -638,27 +738,51 @@ export default function register(api: PluginApi) {
     {
       name: "discord_dm_reset",
       description:
-        "Reset the AI turn counter for a Discord DM channel. " +
-        "Use after a human agent finishes handling the conversation to re-enable AI responses.",
+        "Reset the AI turn counter for a Discord DM channel on a specific bot. " +
+        "Use after a human agent finishes the conversation to re-enable AI responses.",
       parameters: {
         type: "object",
         properties: {
+          botId: {
+            type: "string",
+            description:
+              "Bot ID to target. Use discord_bots_list to see available bots. " +
+              'Omit to target the single bot (when only one is configured); use "default" as fallback.',
+          },
           channelId: {
             type: "string",
-            description: "Discord DM channel ID (numeric snowflake ID).",
+            description: "Discord DM channel ID (numeric snowflake).",
           },
         },
         required: ["channelId"],
       },
       async execute(_id, params) {
         const channelId = params.channelId as string;
-        conversations.reset(channelId);
+        const raw = resolvePluginConfig(api);
+        const bots = resolveBotConfigs(raw);
+        const botId =
+          (params.botId as string | undefined) ?? (bots.length === 1 ? bots[0].id : undefined);
+        if (!botId) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: "Multiple bots configured — please specify botId.",
+                  availableBots: bots.map((b) => b.id),
+                }),
+              },
+            ],
+          };
+        }
+        store.reset(botId, channelId);
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 reset: true,
+                botId,
                 channelId,
                 message: "Conversation reset. AI will respond again from turn 1.",
               }),
@@ -675,10 +799,15 @@ export default function register(api: PluginApi) {
     {
       name: "discord_dm_status",
       description:
-        "Check the current AI turn count and handover status for a Discord DM channel.",
+        "Check the AI turn count and handover status for a Discord DM channel on a specific bot.",
       parameters: {
         type: "object",
         properties: {
+          botId: {
+            type: "string",
+            description:
+              "Bot ID to query. Omit when only one bot is configured.",
+          },
           channelId: {
             type: "string",
             description: "Discord DM channel ID to inspect.",
@@ -687,18 +816,36 @@ export default function register(api: PluginApi) {
         required: ["channelId"],
       },
       async execute(_id, params) {
-        const cfg = resolveConfig();
         const channelId = params.channelId as string;
-        const { turns, handedOver } = conversations.summary(channelId);
+        const raw = resolvePluginConfig(api);
+        const bots = resolveBotConfigs(raw);
+        const botId =
+          (params.botId as string | undefined) ?? (bots.length === 1 ? bots[0].id : undefined);
+        if (!botId) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  error: "Multiple bots configured — please specify botId.",
+                  availableBots: bots.map((b) => b.id),
+                }),
+              },
+            ],
+          };
+        }
+        const botCfg = bots.find((b) => b.id === botId);
+        const { turns, handedOver } = store.summary(botId, channelId);
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
+                botId,
                 channelId,
                 turns,
-                maxTurns: cfg.maxDmTurns,
-                turnsRemaining: Math.max(0, cfg.maxDmTurns - turns),
+                maxTurns: botCfg?.maxDmTurns ?? DEFAULTS.maxDmTurns,
+                turnsRemaining: Math.max(0, (botCfg?.maxDmTurns ?? DEFAULTS.maxDmTurns) - turns),
                 handedOver,
               }),
             },
