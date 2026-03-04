@@ -1,12 +1,18 @@
 {
   "name": "gami-discord-recruit",
   "version": "1.0.0",
-  "description": "OpenClaw plugin for Discord member recruitment on Gami gaming platform",
+  "description": "OpenClaw plugin — browser-based Discord DM handler and recruitment tool for Gami gaming platform",
   "type": "module",
   "main": "./index.ts",
   "openclaw": {
     "extensions": ["./index.ts"]
   },
   "keywords": ["openclaw", "discord", "recruitment", "gaming"],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14"
+  }
 }

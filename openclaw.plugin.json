@@ -1,7 +1,7 @@
 {
   "id": "gami-discord-recruit",
   "name": "Gami Discord Recruitment",
-  "description": "Discord member scanning and DM conversation manager for Gami gaming platform. Uses browser-based Discord access and local LLM for private conversations.",
+  "description": "Browser-based Discord DM handler for Gami gaming platform. Monitors Discord web via Chrome CDP — no bot token required. Calls a local LLM for responses and hands over to humans after a configurable turn limit.",
   "version": "1.0.0",
   "skills": ["./skills"],
   "configSchema": {
@@ -10,22 +10,46 @@
     "properties": {
       "maxDmTurns": {
         "type": "number",
-        "description": "Max AI turns per DM conversation before human takeover (default: 5)"
+        "description": "Max AI turns per DM conversation before human takeover. Default: 5"
       },
       "takeoverMessage": {
         "type": "string",
-        "description": "Message to send to user when handing over to human agent"
+        "description": "Message sent to the user when handing over to a human agent."
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "description": "How often (ms) to poll Discord for new DMs. Default: 5000"
+      },
+      "cdpPort": {
+        "type": "number",
+        "description": "Chrome DevTools Protocol port for the OpenClaw managed browser profile. Default: 18800"
+      },
+      "llmBaseUrl": {
+        "type": "string",
+        "description": "Base URL for the OpenAI-compatible LLM endpoint. Default: http://192.168.8.201:8080/v1"
+      },
+      "llmModel": {
+        "type": "string",
+        "description": "Model name to send in LLM requests. Default: default"
+      },
+      "llmApiKey": {
+        "type": "string",
+        "description": "API key for the LLM endpoint (use 'not-required' if none needed)."
+      },
+      "systemPrompt": {
+        "type": "string",
+        "description": "System prompt injected at the start of every new DM conversation. Overrides the built-in Gami recruiting prompt."
       }
     }
   },
   "uiHints": {
-    "maxDmTurns": {
-      "label": "Max DM Turns",
-      "placeholder": "5"
-    },
-    "takeoverMessage": {
-      "label": "Human Takeover Message",
-      "placeholder": "感谢您的耐心！人工客服将接管后续沟通。"
-    }
+    "maxDmTurns": { "label": "Max DM Turns", "placeholder": "5" },
+    "takeoverMessage": { "label": "Human Takeover Message" },
+    "pollIntervalMs": { "label": "Poll Interval (ms)", "placeholder": "5000" },
+    "cdpPort": { "label": "CDP Port", "placeholder": "18800" },
+    "llmBaseUrl": { "label": "LLM Base URL", "placeholder": "http://192.168.8.201:8080/v1" },
+    "llmModel": { "label": "LLM Model Name", "placeholder": "default" },
+    "llmApiKey": { "label": "LLM API Key", "sensitive": true },
+    "systemPrompt": { "label": "System Prompt" }
   }
 }

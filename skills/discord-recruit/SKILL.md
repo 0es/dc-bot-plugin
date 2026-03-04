@@ -1,99 +1,93 @@
 ---
 name: discord-recruit
-description: Use the managed browser to find active members in a Discord guild channel and send them recruitment messages for the Gami gaming platform. Accesses Discord via the web UI to avoid bot detection.
+description: Use the managed browser to find active members in a Discord guild channel and send them recruitment DMs for the Gami gaming platform. Accesses Discord via the web UI to avoid bot detection. DM replies are handled automatically by the plugin — this skill only covers outbound recruitment.
 metadata: {"openclaw": {"requires": {"config": ["browser.enabled"]}, "os": ["darwin"], "emoji": "🎮"}}
 ---
 
-# Discord Recruitment via Browser
+# Discord Outbound Recruitment via Browser
 
-Use OpenClaw's managed browser to navigate Discord web and recruit users for the Gami gaming platform. This skill accesses Discord through a real browser session — never through a bot API — to avoid triggering Discord's automated detection systems.
+Use OpenClaw's managed browser to navigate Discord web and send recruitment messages to users for Gami.
+
+**Important:** This skill handles **outbound** recruitment only (finding users and sending the first message). Once a user replies, the plugin's CDP polling loop takes over the conversation automatically — you do not need to monitor or reply to DMs.
 
 ## Prerequisites
 
-- The managed browser must be running and logged into Discord (`browser.enabled: true` in config).
-- You must be logged into Discord in the `openclaw` browser profile.
-- You need the target Guild ID and Channel ID.
+- Managed browser running and logged into Discord (`browser.enabled: true`).
+- The plugin is running (check: `openclaw plugins list` shows `gami-discord-recruit` enabled).
+- You need: Guild ID (server ID) and Channel ID to recruit from.
 
-## How to Recruit: Step-by-Step
+## Recruitment Steps
 
 ### Step 1 — Navigate to the target channel
-
-Use the `browser` tool to open the channel URL:
 
 ```
 https://discord.com/channels/{GUILD_ID}/{CHANNEL_ID}
 ```
 
-Wait 2–3 seconds for the page to fully load before interacting.
+Wait 2–3 seconds for the page to fully load.
 
-### Step 2 — Collect active members from the channel
+### Step 2 — Find active members
 
-1. Look for the **member list panel** on the right side of the screen.
-   - If not visible, click the **"Show Member List"** button (person icon) in the top-right toolbar.
-2. Scroll through the member list slowly. Pause 1–2 seconds between scrolls to avoid rate limits.
-3. Note down usernames of members who appear to be **active** (green/yellow dot) or have **recently sent messages** in the channel.
-4. Avoid targeting:
-   - Bots (usually have a "BOT" badge)
-   - Users with "Do Not Disturb" status (red dot)
-   - Server admins/moderators unless explicitly instructed
+1. Open the **Member List** panel (person icon in the top-right toolbar if not visible).
+2. Scroll slowly through the list. Pause 1–2 seconds between scrolls.
+3. Note usernames of members with:
+   - Green or yellow status dot (online/idle)
+   - Recent messages visible in the channel
+4. Skip: bots (BOT badge), red-dot (DND) users, and admins/moderators unless explicitly asked.
 
-### Step 3 — Open a DM with each target user
+### Step 3 — Open DM and send recruitment message
 
 For each target user:
 
-1. Click on their **username or avatar** in the member list to open their profile card.
-2. Click **"Send Message"** (or the message icon) on their profile card.
+1. Click their username/avatar → profile card appears.
+2. Click **"Send Message"** (message icon on the profile card).
 3. Wait 1–2 seconds for the DM window to open.
-4. **Do not send immediately** — read Step 4 first.
+4. Compose a personalised message using the templates below, then press Enter.
 
-### Step 4 — Send the recruitment message
+**After sending the first message, do not stay in that DM.** The plugin will automatically detect the reply and handle the conversation.
 
-Compose a personalized, natural-sounding message. Use the template below and adapt it to the user's apparent game interests if visible:
+### Step 4 — Message templates
+
+Vary the wording between messages:
 
 ```
 嗨！👋 我是 Gami 平台的招募专员。
 
-Gami 是一个专注游戏陪玩的平台，我们正在招募热爱游戏的小伙伴加入我们的陪玩团队。
+Gami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团队。
 
-✨ 为什么选择 Gami？
-• 灵活的工作时间，随时上线接单
-• 公平的分成比例，按时结算
-• 活跃的社区氛围，认识更多游戏圈朋友
+✨ 灵活接单 | 公平分成 | 活跃社区
 
-如果你有兴趣了解更多，欢迎回复我！我可以详细介绍平台情况 🎮
+有兴趣了解的话欢迎回复我！🎮
 ```
 
-**Important:** Vary the wording slightly between messages to avoid appearing automated. Change emoji positions, add different greetings, or reference their apparent game preference if visible on their profile.
+```
+你好～ 我在帮 Gami 陪玩平台招募有游戏热情的小伙伴。
 
-### Step 5 — Anti-detection behavior
+平台灵活、收益透明，很适合喜欢游戏的玩家 😊
 
-- Add a **random pause of 15–45 seconds** between sending DMs to different users.
-- Do **not** send more than **10 DMs per hour** in a single session.
-- If Discord shows a "You are sending messages too fast" warning, pause for at least **5 minutes** before continuing.
-- If a CAPTCHA or verification prompt appears, stop the session and notify the user immediately.
-- Prefer recruiting from channels where you have an existing presence (member of the server).
+感兴趣可以聊聊～
+```
+
+### Step 5 — Anti-detection behaviour
+
+- Add a **15–45 second random pause** between each DM.
+- Do **not** send more than **10 DMs per hour**.
+- If Discord shows "You are sending too fast" — stop and wait 5+ minutes.
+- If a CAPTCHA appears — stop immediately and notify the operator.
+- Never send identical message text to more than 3 users in the same session.
 
 ### Step 6 — Report results
 
-After completing a recruitment session, summarize:
-- How many users were contacted
-- Usernames contacted (for tracking)
-- Any errors or warnings encountered
-- Suggested next action (wait time before next session, etc.)
+After completing a session, summarise:
+- Number of users contacted and their usernames (for deduplication tracking)
+- Any warnings or errors
+- Recommended wait time before next session
 
-## Example Usage
+## Example usage
 
-When a user asks you to "recruit from Discord server 123456789 channel 987654321", you should:
+> "在 Discord 服务器 123456789 的 987654321 频道里找5个活跃用户发招新消息"
 
-1. Call `discord_recruit` tool or begin the browser-based flow above.
-2. Navigate to `https://discord.com/channels/123456789/987654321`.
-3. Collect 5–10 active member names.
-4. Send personalized DMs with appropriate delays.
-5. Report back with results.
-
-## Safety Notes
-
-- Never send the same message text identically to more than 3 users in the same session.
-- Never access channels you are not a member of.
-- If Discord temporarily restricts the account, do not retry for at least 24 hours.
-- This skill should only be used for legitimate recruitment on servers where recruiting is permitted.
+1. Navigate to `https://discord.com/channels/123456789/987654321`
+2. Identify 5 active members
+3. Send personalised DMs with appropriate delays
+4. Report back with usernames contacted
