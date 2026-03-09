@@ -202,6 +202,7 @@ export class DiscordBrowserPoller {
         return;
       }
 
+      this.log.debug(`Calling LLM for channel ${dm.channelId}`);
       const reply = await callLLM(conv.history, this.cfg);
       if (!reply) {
         this.log.warn(`Channel ${dm.channelId}: LLM returned empty reply`);
