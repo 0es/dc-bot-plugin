@@ -72,11 +72,9 @@ export const GET_UNREAD_DMS_JS = `
  * On the first visit (lastSeenId = "") returns a single __INIT__ sentinel with
  * the latest message ID so we never reply to messages sent before we started.
  *
- * List: [data-list-id^="chat-messages"] (e.g. chat-messages or chat-messages-uid_36).
- * Items: [data-list-item-id^="chat-messages___"] (article div) or li[id^="chat-messages-"].
- * Message ID: from id "chat-messages-{msgId}" or "chat-messages-{channelId}-{msgId}", or data-list-item-id.
- * Content: [id^="message-content-"], [id*="message-content-"], [role="document"].
- * Author: [id^="message-username-"], or [class*="header"] [class*="username"] / h2 span.
+ * List: [data-list-id^="chat-messages"]. Items: [data-list-item-id^="chat-messages___"] or li[id^="chat-messages-"].
+ * When lastSeenId is not found in the list (e.g. virtual list scrolled), falls back to collecting any visible
+ * message with id > lastSeenId (Discord snowflake order), so the latest user message is not missed.
  */
 export function buildGetMessagesJS(lastSeenId: string): string {
   const escaped = JSON.stringify(lastSeenId);
@@ -99,6 +97,25 @@ export function buildGetMessagesJS(lastSeenId: string): string {
     }
     return null;
   }
+  function getContent(item) {
+    var contentEl = item.querySelector('[id^="message-content-"]') ||
+                    item.querySelector('[id*="message-content-"]') ||
+                    item.querySelector('[role="document"]');
+    var content = (contentEl && contentEl.textContent) ? contentEl.textContent : '';
+    if (!content || !content.trim()) {
+      var article = item.querySelector('[role="article"]');
+      if (article && article !== item) content = article.textContent || '';
+    }
+    return content ? content.trim() : '';
+  }
+  function getAuthor(item) {
+    var authorEl = item.querySelector('[id^="message-username-"]');
+    if (!authorEl) {
+      var h = item.querySelector('[class*="header"]');
+      authorEl = h ? h.querySelector('[class*="username"], [class*="nameTag"], h2 span, h3 span') : null;
+    }
+    return authorEl ? authorEl.textContent.trim() : '__continued__';
+  }
   try {
     var results = [];
     var list = document.querySelector('[data-list-id^="chat-messages"]');
@@ -107,10 +124,12 @@ export function buildGetMessagesJS(lastSeenId: string): string {
     var byId = list.querySelectorAll('li[id^="chat-messages-"]');
     var items = byDataId.length > 0 ? Array.from(byDataId) : Array.from(byId);
     if (!lastSeenId) {
-      var last = items[items.length - 1];
-      if (!last) return results;
-      var msgId = parseMessageId(last);
-      if (msgId) results.push({ id: msgId, author: '__INIT__', content: '' });
+      var maxId = null;
+      for (var i = 0; i < items.length; i++) {
+        var mid = parseMessageId(items[i]);
+        if (mid && (!maxId || mid > maxId)) maxId = mid;
+      }
+      if (maxId) results.push({ id: maxId, author: '__INIT__', content: '' });
       return results;
     }
     var found = false;
@@ -119,23 +138,22 @@ export function buildGetMessagesJS(lastSeenId: string): string {
       var msgId = parseMessageId(item);
       if (!msgId) continue;
       if (!found) { if (msgId === lastSeenId) found = true; continue; }
-      var contentEl = item.querySelector('[id^="message-content-"]') ||
-                      item.querySelector('[id*="message-content-"]') ||
-                      item.querySelector('[role="document"]');
-      var content = (contentEl && contentEl.textContent) ? contentEl.textContent : '';
-      if (!content || !content.trim()) {
-        var article = item.querySelector('[role="article"]');
-        if (article && article !== item) content = article.textContent || '';
-        if (!content || !content.trim()) continue;
-      }
-      var authorEl = item.querySelector('[id^="message-username-"]') ||
-                     (function () {
-                       var h = item.querySelector('[class*="header"]');
-                       return h ? h.querySelector('[class*="username"], [class*="nameTag"], h2 span, h3 span') : null;
-                     })();
-      var author = authorEl ? authorEl.textContent.trim() : '__continued__';
-      results.push({ id: msgId, author: author, content: content.trim() });
+      var content = getContent(item);
+      if (!content) continue;
+      results.push({ id: msgId, author: getAuthor(item), content: content });
     }
+    if (!found && items.length > 0) {
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        var id = parseMessageId(it);
+        if (!id || id <= lastSeenId) continue;
+        var c = getContent(it);
+        if (!c) continue;
+        results.push({ id: id, author: getAuthor(it), content: c });
+      }
+    }
+    if (results.length > 0)
+      results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
     return results;
   } catch (e) { return []; }
 })(${escaped})`;
