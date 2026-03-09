@@ -5,33 +5,63 @@
 // ── DM poller helpers ─────────────────────────────────────────────────────────
 
 /**
- * Scan the DM sidebar for channels that have an unread badge.
+ * Scan the DM list for channels that have an unread indicator.
  * Returns an array of { channelId, label }.
+ *
+ * Sidebar: [data-list-id^="private-channels"] (e.g. private-channels-uid_36), or
+ * [aria-label="Direct Messages"] / [aria-label="Private channels"]; fallback document.body.
+ * Unread: link aria-label contains "unread" (most accurate), or class/badge fallbacks.
  */
 export const GET_UNREAD_DMS_JS = `
 (function () {
+  function hasUnreadClass(el) {
+    var n = el;
+    for (var i = 0; i < 6 && n; i++) {
+      var c = (n.getAttribute && n.getAttribute('class')) || '';
+      if (/unread/i.test(c)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  }
+  function hasUnreadIndicator(link) {
+    var aria = (link.getAttribute && link.getAttribute('aria-label')) || '';
+    if (/unread|\\u672a\\u8bfb/i.test(aria)) return true;
+    if (hasUnreadClass(link)) return true;
+    var badge = link.querySelector('[class*="numberBadge"]') ||
+                link.querySelector('[class*="unreadBadge"]') ||
+                link.querySelector('[class*="badge"]') ||
+                link.querySelector('[class*="unread"]') ||
+                link.querySelector('[role="status"]');
+    if (badge) return true;
+    var parent = link.parentElement;
+    if (parent && hasUnreadClass(parent)) return true;
+    return false;
+  }
   try {
+    var seen = {};
     var results = [];
     var sidebar =
+      document.querySelector('[data-list-id^="private-channels"]') ||
       document.querySelector('[aria-label="Direct Messages"]') ||
-      document.querySelector('[data-list-id="private-channels"]');
-    if (!sidebar) return results;
-    var links = sidebar.querySelectorAll('a[href*="/channels/@me/"]');
-    for (var i = 0; i < links.length; i++) {
-      var link = links[i];
-      var m = link.href.match(/\\/channels\\/@me\\/(\\d+)/);
-      if (!m) continue;
-      var channelId = m[1];
-      var badge =
-        link.querySelector('[class*="numberBadge"]') ||
-        link.querySelector('[class*="unreadBadge"]') ||
-        link.querySelector('[class*="badge"]');
-      if (!badge) continue;
-      var label =
-        link.getAttribute('aria-label') ||
-        ((link.querySelector('[class*="name"]') || {}).textContent) ||
-        channelId;
-      results.push({ channelId: channelId, label: label.trim() });
+      document.querySelector('[aria-label="Private channels"]') ||
+      document.querySelector('[data-list-id="dm-list"]');
+    var roots = sidebar ? [sidebar] : [document.body];
+    for (var r = 0; r < roots.length; r++) {
+      var links = roots[r].querySelectorAll('a[href*="/channels/@me/"]');
+      for (var i = 0; i < links.length; i++) {
+        var link = links[i];
+        var m = link.href.match(/\\/channels\\/@me\\/(\\d+)/);
+        if (!m) continue;
+        var channelId = m[1];
+        if (seen[channelId]) continue;
+        if (!hasUnreadIndicator(link)) continue;
+        seen[channelId] = true;
+        var nameEl = link.querySelector('[class*="name"]');
+        var label = (link.getAttribute && link.getAttribute('aria-label')) ||
+                    (nameEl && nameEl.textContent) ||
+                    channelId;
+        results.push({ channelId: channelId, label: (label && label.trim()) ? label.trim() : channelId });
+      }
     }
     return results;
   } catch (e) { return []; }
@@ -41,32 +71,53 @@ export const GET_UNREAD_DMS_JS = `
  * Fetch new messages since `lastSeenId`.
  * On the first visit (lastSeenId = "") returns a single __INIT__ sentinel with
  * the latest message ID so we never reply to messages sent before we started.
+ *
+ * Uses stable selectors: [data-list-id="chat-messages"], then items by
+ * li[id^="chat-messages-"] or [data-list-item-id^="chat-messages___"] (virtual list),
+ * content from [id^="message-content-"] or [role="document"].
  */
 export function buildGetMessagesJS(lastSeenId: string): string {
   const escaped = JSON.stringify(lastSeenId);
   return `
 (function (lastSeenId) {
+  function parseMessageId(item) {
+    var id = item.id;
+    if (id) {
+      var m = id.match(/chat-messages-\\d+-(\\d+)/);
+      if (m) return m[1];
+    }
+    var dataId = item.getAttribute('data-list-item-id');
+    if (dataId) {
+      var m2 = dataId.match(/chat-messages___chat-messages-(\\d+)/);
+      if (m2) return m2[1];
+    }
+    return null;
+  }
   try {
     var results = [];
     var list = document.querySelector('[data-list-id="chat-messages"]');
     if (!list) return results;
-    var items = Array.from(list.querySelectorAll('li[id^="chat-messages-"]'));
+    var byId = list.querySelectorAll('li[id^="chat-messages-"]');
+    var byDataId = list.querySelectorAll('[data-list-item-id^="chat-messages___"]');
+    var items = byId.length >= byDataId.length
+      ? Array.from(byId)
+      : Array.from(byDataId);
     if (!lastSeenId) {
       var last = items[items.length - 1];
       if (!last) return results;
-      var idm = last.id.match(/chat-messages-\\d+-(\\d+)/);
-      if (idm) results.push({ id: idm[1], author: '__INIT__', content: '' });
+      var msgId = parseMessageId(last);
+      if (msgId) results.push({ id: msgId, author: '__INIT__', content: '' });
       return results;
     }
     var found = false;
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
-      var idMatch = item.id.match(/chat-messages-\\d+-(\\d+)/);
-      if (!idMatch) continue;
-      var msgId = idMatch[1];
+      var msgId = parseMessageId(item);
+      if (!msgId) continue;
       if (!found) { if (msgId === lastSeenId) found = true; continue; }
-      var contentEl = item.querySelector('[id^="message-content-"]');
-      var content = (contentEl || {}).textContent;
+      var contentEl = item.querySelector('[id^="message-content-"]') ||
+                      item.querySelector('[role="document"]');
+      var content = (contentEl && contentEl.textContent) ? contentEl.textContent : '';
       if (!content || !content.trim()) continue;
       var headerEl = item.querySelector('[class*="header"]');
       var authorEl = headerEl

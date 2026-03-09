@@ -119,7 +119,51 @@ export async function closeTab(
 // ── Discord message sender ────────────────────────────────────────────────────
 
 /**
- * Type a message into the focused Discord text box and press Enter.
+ * Build in-page script that inserts text via Discord's Slate editor instance.
+ * Discord uses Slate.js; CDP Input.insertText often does not update Slate state.
+ * This uses React internals to get the editor and call insertText(). Returns
+ * true if text was inserted, false to fall back to CDP Input.insertText.
+ */
+function buildSlateInsertTextJS(text: string): string {
+  const escaped = JSON.stringify(text);
+  return `
+(function (text) {
+  try {
+    var el = document.querySelector('[data-slate-editor="true"]') ||
+             document.querySelector('[role="textbox"][contenteditable="true"]');
+    if (!el) return false;
+    var key = Object.keys(el).filter(function (k) { return k.indexOf('__react') === 0; })[0];
+    if (!key) return false;
+    var fiber = el[key];
+    var editor = (fiber && fiber.child && fiber.child.memoizedProps && fiber.child.memoizedProps.node) ||
+                 (fiber && fiber.memoizedProps && fiber.memoizedProps.node);
+    if (!editor || typeof editor.insertText !== 'function') return false;
+    el.focus();
+    editor.insertText(text);
+    return true;
+  } catch (e) { return false; }
+})(${escaped})`;
+}
+
+/**
+ * Focus the Discord message input (Slate editor or contenteditable).
+ * Prefers [data-slate-editor="true"] so Slate path can run afterward.
+ */
+const FOCUS_MESSAGE_INPUT_JS = `
+(function () {
+  var box = document.querySelector('[data-slate-editor="true"]') ||
+            document.querySelector('[role="textbox"][contenteditable="true"]') ||
+            document.querySelector('[role="textbox"][contenteditable]');
+  if (!box) return false;
+  box.click();
+  box.focus();
+  return true;
+})()`;
+
+/**
+ * Type a message into the Discord DM input and send (Enter).
+ * Prefers Slate editor.insertText() so the app registers the message; falls
+ * back to CDP Input.insertText if Slate is unavailable.
  * Caller must ensure the correct DM channel is already open.
  */
 export async function sendMessageRaw(
@@ -127,20 +171,19 @@ export async function sendMessageRaw(
   text: string,
   log: (msg: string) => void
 ): Promise<void> {
-  const focused = (await sess.evaluate(`
-    (function () {
-      var box = document.querySelector('[role="textbox"][contenteditable]');
-      if (!box) return false;
-      box.click(); box.focus(); return true;
-    })()`)) as boolean;
-
+  const focused = (await sess.evaluate(FOCUS_MESSAGE_INPUT_JS)) as boolean;
   if (!focused) {
     log("Could not focus message input box");
     return;
   }
 
   await sleep(150);
-  await sess.send("Input.insertText", { text });
+
+  const usedSlate = (await sess.evaluate(buildSlateInsertTextJS(text))) as boolean;
+  if (!usedSlate) {
+    await sess.send("Input.insertText", { text });
+  }
+
   await sleep(200);
   await sess.send("Input.dispatchKeyEvent", {
     type: "keyDown",
