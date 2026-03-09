@@ -44,6 +44,7 @@ export function startServer(
         send(res, 200, {
           running: poller.isRunning(),
           selfName: poller.getSelfName(),
+          selfUserId: poller.getSelfUserId(),
           activeConversations: store.listAll(),
         });
         return;

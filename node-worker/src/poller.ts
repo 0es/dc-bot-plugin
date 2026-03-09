@@ -9,6 +9,7 @@ import {
 import {
   GET_UNREAD_DMS_JS,
   GET_SELF_DISPLAY_NAME_JS,
+  GET_SELF_USER_ID_JS,
   buildGetMessagesJS,
 } from "./discord-dom.js";
 import { callLLM } from "./llm.js";
@@ -37,6 +38,7 @@ export class DiscordBrowserPoller {
   private readonly processing = new Set<string>();
   private readonly lastHandledAt = new Map<string, number>();
   private selfName: string | null = null;
+  private selfUserId: string | null = null;
   private running = false;
   private readonly log: Logger;
 
@@ -77,6 +79,10 @@ export class DiscordBrowserPoller {
 
   getSelfName(): string | null {
     return this.selfName;
+  }
+
+  getSelfUserId(): string | null {
+    return this.selfUserId;
   }
 
   // ── Internal ─────────────────────────────────────────────────────────────
@@ -138,6 +144,11 @@ export class DiscordBrowserPoller {
       )) as string | null;
       if (this.selfName) this.log.debug(`Self (fallback): "${this.selfName}"`);
     }
+    const uidFromPage = (await sess.evaluate(GET_SELF_USER_ID_JS)) as string | null;
+    if (uidFromPage) {
+      this.selfUserId = uidFromPage;
+      this.log.debug(`Self user ID: ${this.selfUserId}`);
+    }
 
     const unread = ((await sess.evaluate(GET_UNREAD_DMS_JS)) ?? []) as UnreadDM[];
     if (unread.length > 0) {
@@ -193,7 +204,7 @@ export class DiscordBrowserPoller {
 
       const conv = this.store.get(dm.channelId);
       const messages = ((await sess.evaluate(
-        buildGetMessagesJS(conv.lastSeenMsgId, this.selfName)
+        buildGetMessagesJS(conv.lastSeenMsgId, this.selfName, this.selfUserId)
       )) ?? []) as DiscordMessage[];
 
       if (messages.length === 0) return;
