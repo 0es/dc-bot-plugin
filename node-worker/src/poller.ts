@@ -204,7 +204,7 @@ export class DiscordBrowserPoller {
 
       const conv = this.store.get(dm.channelId);
       const messages = ((await sess.evaluate(
-        buildGetMessagesJS(conv.lastSeenMsgId, this.selfName, this.selfUserId)
+        buildGetMessagesJS(conv.lastSeenMsgId)
       )) ?? []) as DiscordMessage[];
 
       if (messages.length === 0) return;

@@ -30,11 +30,11 @@ async function main() {
   const unread = (await sess.evaluate(GET_UNREAD_DMS_JS)) as unknown;
   console.log("GET_UNREAD_DMS_JS:", JSON.stringify(unread, null, 2));
 
-  const messages = (await sess.evaluate(buildGetMessagesJS("", null, null))) as unknown;
-  console.log("buildGetMessagesJS('', null, null):", JSON.stringify(messages, null, 2));
+  const messages = (await sess.evaluate(buildGetMessagesJS(""))) as unknown;
+  console.log("buildGetMessagesJS(''):", JSON.stringify(messages, null, 2));
 
-  const withLast = (await sess.evaluate(buildGetMessagesJS("__DUMMY__", null, null))) as unknown;
-  console.log("buildGetMessagesJS('__DUMMY__', null, null):", JSON.stringify(withLast, null, 2));
+  const withLast = (await sess.evaluate(buildGetMessagesJS("__DUMMY__"))) as unknown;
+  console.log("buildGetMessagesJS('__DUMMY__'):", JSON.stringify(withLast, null, 2));
 
   sess.close();
 }

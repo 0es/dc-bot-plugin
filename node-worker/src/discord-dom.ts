@@ -123,39 +123,20 @@ export const GET_SELF_USER_ID_JS = `
 
 /**
  * Fetch messages since lastSeenId. Each message includes isFromSelf (true = from the logged-in bot).
- * isFromSelf is determined by DOM identity first: localUser wrapper class, then data-author-id vs selfUserId, then display name match.
+ * isFromSelf is determined by whether the message's action area contains the edit button (id message-actions-edit).
+ * Only our own messages show the edit button in the buttonContainer.
  *
  * When lastSeenId is empty, returns all visible messages (no __INIT__); poller filters to from-other and replies to latest.
  * List: [data-list-id^="chat-messages"]. Items: [data-list-item-id^="chat-messages___"] or li[id^="chat-messages-"].
  */
-export function buildGetMessagesJS(
-  lastSeenId: string,
-  selfName: string | null,
-  selfUserId: string | null
-): string {
+export function buildGetMessagesJS(lastSeenId: string): string {
   const escapedLast = JSON.stringify(lastSeenId);
-  const escapedSelf = JSON.stringify(selfName ?? "");
-  const escapedUid = JSON.stringify(selfUserId ?? "");
   return `
-(function (lastSeenId, selfName, selfUserId) {
-  selfName = (selfName && typeof selfName === 'string') ? selfName.trim() : '';
-  selfUserId = (selfUserId && typeof selfUserId === 'string') ? selfUserId.trim() : '';
-  function itemIsFromSelfByDOM(item) {
+(function (lastSeenId) {
+  function itemIsFromSelfByEditButton(item) {
     if (!item) return false;
-    var el = item;
-    for (var up = 0; up < 12 && el; up++) {
-      var c = (el.getAttribute && el.getAttribute('class')) || '';
-      if (/localUser/i.test(c)) return true;
-      var aid = el.getAttribute && el.getAttribute('data-author-id');
-      if (selfUserId && aid && aid === selfUserId) return true;
-      el = el.parentElement;
-    }
-    return false;
-  }
-  function isFromSelfByAuthor(author) {
-    if (!author || !author.trim()) return false;
-    if (!selfName) return false;
-    return author.trim() === selfName;
+    var btn = item.querySelector('[id="message-actions-edit"]');
+    return !!(btn);
   }
   function parseMessageId(item) {
     var id = item.id;
@@ -207,7 +188,7 @@ export function buildGetMessagesJS(
         if (!msgId) continue;
         var content = getContent(item);
         var author = getAuthor(item);
-        var fromSelf = itemIsFromSelfByDOM(item) || isFromSelfByAuthor(author);
+        var fromSelf = itemIsFromSelfByEditButton(item);
         results.push({ id: msgId, author: author, content: content || '', isFromSelf: fromSelf });
       }
       if (results.length > 0)
@@ -223,7 +204,7 @@ export function buildGetMessagesJS(
       var content = getContent(item);
       if (!content) continue;
       var author = getAuthor(item);
-      var fromSelf = itemIsFromSelfByDOM(item) || isFromSelfByAuthor(author);
+      var fromSelf = itemIsFromSelfByEditButton(item);
       results.push({ id: msgId, author: author, content: content, isFromSelf: fromSelf });
     }
     if (!found && items.length > 0) {
@@ -234,7 +215,7 @@ export function buildGetMessagesJS(
         var c = getContent(it);
         if (!c) continue;
         var author = getAuthor(it);
-        var fromSelf = itemIsFromSelfByDOM(it) || isFromSelfByAuthor(author);
+        var fromSelf = itemIsFromSelfByEditButton(it);
         results.push({ id: id, author: author, content: c, isFromSelf: fromSelf });
       }
     }
@@ -242,7 +223,7 @@ export function buildGetMessagesJS(
       results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
     return results;
   } catch (e) { return []; }
-})(${escapedLast}, ${escapedSelf}, ${escapedUid})`;
+})(${escapedLast})`;
 }
 
 // ── Recruitment helpers ───────────────────────────────────────────────────────
