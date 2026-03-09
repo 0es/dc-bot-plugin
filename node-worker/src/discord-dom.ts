@@ -72,9 +72,11 @@ export const GET_UNREAD_DMS_JS = `
  * On the first visit (lastSeenId = "") returns a single __INIT__ sentinel with
  * the latest message ID so we never reply to messages sent before we started.
  *
- * Uses stable selectors: [data-list-id="chat-messages"], then items by
- * li[id^="chat-messages-"] or [data-list-item-id^="chat-messages___"] (virtual list),
- * content from [id^="message-content-"] or [role="document"].
+ * List: [data-list-id^="chat-messages"] (e.g. chat-messages or chat-messages-uid_36).
+ * Items: [data-list-item-id^="chat-messages___"] (article div) or li[id^="chat-messages-"].
+ * Message ID: from id "chat-messages-{msgId}" or "chat-messages-{channelId}-{msgId}", or data-list-item-id.
+ * Content: [id^="message-content-"], [id*="message-content-"], [role="document"].
+ * Author: [id^="message-username-"], or [class*="header"] [class*="username"] / h2 span.
  */
 export function buildGetMessagesJS(lastSeenId: string): string {
   const escaped = JSON.stringify(lastSeenId);
@@ -83,7 +85,11 @@ export function buildGetMessagesJS(lastSeenId: string): string {
   function parseMessageId(item) {
     var id = item.id;
     if (id) {
-      var m = id.match(/chat-messages-\\d+-(\\d+)/);
+      var parts = id.split('-');
+      for (var i = parts.length - 1; i >= 0; i--) {
+        if (/^\\d+$/.test(parts[i])) return parts[i];
+      }
+      var m = id.match(/chat-messages-(?:\\d+-)?(\\d+)$/);
       if (m) return m[1];
     }
     var dataId = item.getAttribute('data-list-item-id');
@@ -95,13 +101,11 @@ export function buildGetMessagesJS(lastSeenId: string): string {
   }
   try {
     var results = [];
-    var list = document.querySelector('[data-list-id="chat-messages"]');
+    var list = document.querySelector('[data-list-id^="chat-messages"]');
     if (!list) return results;
-    var byId = list.querySelectorAll('li[id^="chat-messages-"]');
     var byDataId = list.querySelectorAll('[data-list-item-id^="chat-messages___"]');
-    var items = byId.length >= byDataId.length
-      ? Array.from(byId)
-      : Array.from(byDataId);
+    var byId = list.querySelectorAll('li[id^="chat-messages-"]');
+    var items = byDataId.length > 0 ? Array.from(byDataId) : Array.from(byId);
     if (!lastSeenId) {
       var last = items[items.length - 1];
       if (!last) return results;
@@ -116,13 +120,19 @@ export function buildGetMessagesJS(lastSeenId: string): string {
       if (!msgId) continue;
       if (!found) { if (msgId === lastSeenId) found = true; continue; }
       var contentEl = item.querySelector('[id^="message-content-"]') ||
+                      item.querySelector('[id*="message-content-"]') ||
                       item.querySelector('[role="document"]');
       var content = (contentEl && contentEl.textContent) ? contentEl.textContent : '';
-      if (!content || !content.trim()) continue;
-      var headerEl = item.querySelector('[class*="header"]');
-      var authorEl = headerEl
-        ? headerEl.querySelector('[class*="username"], [class*="nameTag"], h3 span')
-        : null;
+      if (!content || !content.trim()) {
+        var article = item.querySelector('[role="article"]');
+        if (article && article !== item) content = article.textContent || '';
+        if (!content || !content.trim()) continue;
+      }
+      var authorEl = item.querySelector('[id^="message-username-"]') ||
+                     (function () {
+                       var h = item.querySelector('[class*="header"]');
+                       return h ? h.querySelector('[class*="username"], [class*="nameTag"], h2 span, h3 span') : null;
+                     })();
       var author = authorEl ? authorEl.textContent.trim() : '__continued__';
       results.push({ id: msgId, author: author, content: content.trim() });
     }

@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./index.ts",
   "scripts": {
-    "start": "tsx index.ts"
+    "start": "tsx index.ts",
+    "test:get-messages": "tsx scripts/test-get-messages.ts"
   },
   "dependencies": {
     "ws": "^8.18.0"
