@@ -108,7 +108,6 @@ function registerBotsListTool(
         return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
       },
     },
-    { optional: true }
   );
 }
 
@@ -166,8 +165,7 @@ function registerDmResetTool(
           return workerError(botId, (e as Error).message);
         }
       },
-    },
-    { optional: true }
+    }
   );
 }
 
@@ -210,8 +208,7 @@ function registerDmStatusTool(
           return workerError(botId, (e as Error).message);
         }
       },
-    },
-    { optional: true }
+    }
   );
 }
 
@@ -283,8 +280,7 @@ function registerRecruitTool(
           return workerError(botId, (e as Error).message);
         }
       },
-    },
-    { optional: true }
+    }
   );
 }
 
