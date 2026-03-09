@@ -1,7 +1,7 @@
 {
   "id": "gami-discord-recruit",
   "name": "Gami Discord Recruitment",
-  "description": "Browser-based Discord DM handler for Gami gaming platform. Each bot node runs a standalone node-worker process that connects to the local Chrome CDP. The plugin routes tool calls to the correct node worker via HTTP — no direct CDP access required from the gateway.",
+  "description": "Browser-based Discord DM handler for Gami. Node-worker on each bot machine only handles DM replies (CDP poll + LLM). Recruitment is done by the Gateway AI controlling the node's browser via OpenClaw browser tools; the plugin provides discord_bots_list, discord_dm_status, discord_dm_reset.",
   "version": "2.0.0",
   "skills": ["./skills"],
   "configSchema": {

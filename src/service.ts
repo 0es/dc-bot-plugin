@@ -61,7 +61,6 @@ export function createDiscordService(pluginConfig?: unknown): GamiDiscordService
       registerBotsListTool(api, botConfigs, clients);
       registerDmResetTool(api, botConfigs, clients, () => log);
       registerDmStatusTool(api, botConfigs, clients);
-      registerRecruitTool(api, botConfigs, clients, () => log);
     },
   };
 
@@ -203,78 +202,6 @@ function registerDmStatusTool(
           const status = await client.getDmStatus(channelId);
           return {
             content: [{ type: "text", text: JSON.stringify({ botId, ...status }) }],
-          };
-        } catch (e) {
-          return workerError(botId, (e as Error).message);
-        }
-      },
-    }
-  );
-}
-
-function registerRecruitTool(
-  api: OpenClawPluginApi,
-  botConfigs: ResolvedBotConfig[],
-  clients: Map<string, WorkerClient>,
-  getLog: () => PluginLogger
-): void {
-  api.registerTool(
-    {
-      name: "discord_recruit",
-      description:
-        "Send outbound recruitment DMs to active members in a Discord server channel, " +
-        "using a specific bot's browser session on its designated node worker. " +
-        "The worker navigates to the channel, finds online/idle members, opens each DM, " +
-        "and sends a recruitment message. " +
-        "Use discord_bots_list to see available bot IDs and their worker URLs.",
-      parameters: {
-        type: "object",
-        properties: {
-          botId: {
-            type: "string",
-            description:
-              "Bot ID whose node worker to use for recruitment. " +
-              "Omit when only one bot is configured; use discord_bots_list to see options.",
-          },
-          guildId: {
-            type: "string",
-            description: "Discord server (guild) ID to recruit from.",
-          },
-          channelId: {
-            type: "string",
-            description: "Channel ID within the guild to find active members.",
-          },
-          count: {
-            type: "number",
-            description:
-              "Number of users to contact in this session (default: 5, max: 10).",
-          },
-          message: {
-            type: "string",
-            description:
-              "Custom recruitment message. Omit to rotate through built-in Gami templates.",
-          },
-        },
-        required: ["guildId", "channelId"],
-      },
-      execute: async (_id, params) => {
-        const guildId = params.guildId as string;
-        const channelId = params.channelId as string;
-        const count = Math.min(Math.max(1, (params.count as number | undefined) ?? 5), 10);
-        const customMessage = params.message as string | undefined;
-
-        const botId = resolveBotId(params.botId as string | undefined, botConfigs);
-        if (!botId) return multipleBotsError(botConfigs);
-
-        const client = clients.get(botId)!;
-        getLog().info(
-          `Recruit: bot="${botId}" guild="${guildId}" channel="${channelId}" count=${count}`
-        );
-
-        try {
-          const result = await client.recruit(guildId, channelId, count, customMessage);
-          return {
-            content: [{ type: "text", text: JSON.stringify({ botId, ...result }, null, 2) }],
           };
         } catch (e) {
           return workerError(botId, (e as Error).message);

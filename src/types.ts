@@ -88,11 +88,3 @@ export interface DmStatus {
   turnsRemaining: number;
   handedOver: boolean;
 }
-
-export interface RecruitResult {
-  guildId: string;
-  channelId: string;
-  contacted: string[];
-  skipped: string[];
-  errors: string[];
-}

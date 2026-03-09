@@ -1,5 +1,4 @@
 import http from "http";
-import { runRecruitSession } from "./recruit.js";
 import { createLogger } from "./logger.js";
 import type { DiscordBrowserPoller } from "./poller.js";
 import type { ConversationStore } from "./store.js";
@@ -10,12 +9,14 @@ import type { WorkerConfig } from "./types.js";
 /**
  * Start the worker HTTP server.
  *
+ * This worker only handles DM replies (poller + store). Recruitment is done
+ * by the Gateway AI controlling the node's browser via OpenClaw browser tools.
+ *
  * API surface:
- *   GET  /health                    → { ok: true }
- *   GET  /status                    → WorkerStatus
- *   GET  /dms/:channelId            → DmStatus
- *   DELETE /dms/:channelId          → { reset: true, channelId }
- *   POST /recruit                   → RecruitResult
+ *   GET    /health         → { ok: true }
+ *   GET    /status         → WorkerStatus
+ *   GET    /dms/:channelId → DmStatus
+ *   DELETE /dms/:channelId  → { reset: true, channelId }
  */
 export function startServer(
   cfg: WorkerConfig,
@@ -73,22 +74,6 @@ export function startServer(
         }
       }
 
-      // POST /recruit
-      if (method === "POST" && path === "/recruit") {
-        const body = await readBody(req);
-        const parsed = JSON.parse(body) as {
-          guildId: string;
-          channelId: string;
-          count?: number;
-          message?: string;
-        };
-        const { guildId, channelId, count = 5, message } = parsed;
-        const safeCount = Math.min(Math.max(1, count), 10);
-        const result = await runRecruitSession(cfg, guildId, channelId, safeCount, message, log);
-        send(res, 200, result);
-        return;
-      }
-
       send(res, 404, { error: "Not Found" });
     } catch (e) {
       log.error(`Request error [${method} ${path}]: ${(e as Error).message}`);
@@ -108,13 +93,4 @@ export function startServer(
 function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status);
   res.end(JSON.stringify(body));
-}
-
-async function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
-    req.on("error", reject);
-  });
 }

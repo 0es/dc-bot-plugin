@@ -15,9 +15,10 @@ export default {
   id: "gami-discord-recruit",
   name: "Gami Discord Recruitment",
   description:
-    "Browser-based Discord DM handler and outbound recruiter for the Gami gaming platform. " +
-    "Monitors Discord web via Chrome CDP — no bot token required. " +
-    "Supports multiple bots running in parallel, each on its own OpenClaw node.",
+    "Browser-based Discord DM handler for the Gami gaming platform. " +
+    "Node-worker on each bot only handles DM replies (CDP + LLM). " +
+    "Recruitment is done by the Gateway AI controlling the node's browser. " +
+    "Supports multiple bots, each on its own OpenClaw node.",
 
   register(api: OpenClawPluginApi) {
     const svc = createDiscordService(api.pluginConfig);

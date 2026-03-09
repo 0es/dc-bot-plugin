@@ -24,13 +24,12 @@ OpenClaw Gateway（主节点）
                                        (192.168.8.101)             Discord 账号 C
 ```
 
-**关键设计：** CDP 永远只在本机访问（`127.0.0.1`）。每台 bot 机器运行一个 `node-worker` 进程，负责：
+**关键设计：**
 
-- 本地连接 Chrome CDP
-- 轮询 Discord 未读 DM → 调用 LLM → 发送回复
-- 暴露 HTTP API（默认 `:3000`）供 gateway plugin 调用
+- **招新**：由 **Gateway AI** 通过 OpenClaw 的 node 端 **browser 工具**（navigate / snapshot / act）控制该 node 上的 Chrome，在 Discord 频道找活跃用户并发送 DM。招新不由 node-worker 执行。
+- **私聊回复**：每台 bot 机器运行一个 **node-worker** 进程，只负责：本地连接 Chrome CDP、轮询 Discord 未读 DM、调用 LLM、发送回复；并暴露 HTTP API（默认 `:3000`）供 gateway plugin 查询状态与重置会话。
 
-Gateway plugin 只通过 HTTP 与各 node-worker 通信，不直接接触 CDP。
+Gateway plugin 通过 HTTP 与各 node-worker 通信（状态、DM 重置），不直接接触 CDP。
 
 ## 功能
 
@@ -39,7 +38,7 @@ Gateway plugin 只通过 HTTP 与各 node-worker 通信，不直接接触 CDP。
 | 多机器人并行 | 每台机器独立 node-worker，各自维护会话状态 |
 | 接收 Discord DM | node-worker CDP 轮询未读指示器，解析 DOM 消息内容 |
 | 发送 Discord DM | CDP `Input.insertText` + `Enter` 模拟真实浏览器输入 |
-| **主动招新** | `discord_recruit` 工具 → node-worker 开独立 Tab 执行 |
+| **主动招新** | Gateway AI 控制 node 端浏览器（navigate / snapshot / act）完成；node-worker 不参与 |
 | 私聊 LLM 对话 | node-worker 直接调用 `/v1/chat/completions` |
 | 自定义 System Prompt | node-worker 环境变量 `SYSTEM_PROMPT` |
 | 5 轮后人工接管 | node-worker 内置，会话状态存本地内存 |
@@ -68,7 +67,7 @@ dc-bot-plugin/
 │       ├── store.ts           # 会话状态（内存）
 │       ├── llm.ts             # LLM 调用
 │       ├── poller.ts          # DM 轮询主循环
-│       ├── recruit.ts         # 主动招新逻辑
+│       ├── recruit.ts         # （保留供参考；招新现由 Gateway 控制 node 浏览器）
 │       └── server.ts          # HTTP API 服务器
 ├── skills/
 │   └── discord-recruit/
@@ -216,38 +215,18 @@ openclaw gateway restart
 3. 前 N 轮（默认5轮）AI 自动处理
 4. 超过轮数后发送接管通知并停止
 
-### 主动招新（指定 bot 节点）
+### 主动招新（由 Gateway AI 控制 node 端浏览器）
 
-```
-用 bot-node2 在服务器 [GUILD_ID] 的 [CHANNEL_ID] 频道里找5个活跃用户发招新消息
-```
+招新**不由** `discord_recruit` 工具执行，而是由 **Gateway AI** 通过 OpenClaw 的 **node 端 browser 工具**（navigate、snapshot、act）完成。
 
-调用 `discord_recruit` 工具，插件会调用该 bot 对应 node-worker，由 worker 在 Chrome 上**开启独立 Tab**，自动完成：扫描在线成员 → 逐个打开 DM → 发送招新话术 → 关闭 Tab，不影响该 bot 的 DM 自动回复轮询。
+1. 用 `discord_bots_list` 确认目标 bot 及其对应的 node（运行该 bot 的机器）。
+2. 使用 **browser 工具**并指定该 node 为操作目标，然后：
+   - 导航到 `https://discord.com/channels/{GUILD_ID}/{CHANNEL_ID}`
+   - 打开成员列表，找到在线/空闲用户
+   - 逐个点击用户 → 打开 DM → 输入招新话术并发送
+3. 详细步骤与反检测要求见 `skills/discord-recruit/SKILL.md`。
 
-工具参数：
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| `botId` | 多 bot 时必填 | 要使用的 bot ID（由 `discord_bots_list` 查询）|
-| `guildId` | ✅ | Discord 服务器 ID |
-| `channelId` | ✅ | 目标频道 ID |
-| `count` | 可选 | 本次联系人数（默认 5，最大 10）|
-| `message` | 可选 | 自定义话术；省略则轮换内置 Gami 模板 |
-
-返回示例：
-
-```json
-{
-  "botId": "bot-node2",
-  "guildId": "123456789",
-  "channelId": "987654321",
-  "contacted": ["PlayerA", "PlayerB", "PlayerC"],
-  "skipped": ["PlayerD: Message button not found in popup"],
-  "errors": []
-}
-```
-
-**注意**：工具在两条 DM 之间自动等待 15–45 秒，单次最多 10 条，符合反检测要求。
+**注意**：两条 DM 之间建议间隔 15–45 秒，每小时不超过 10 条。
 
 ### 查看某 bot 的对话状态
 
@@ -290,7 +269,6 @@ openclaw gateway restart
 | `GET` | `/status` | 运行状态 + 活跃会话列表 |
 | `GET` | `/dms/:channelId` | 查询某频道的轮次状态 |
 | `DELETE` | `/dms/:channelId` | 重置某频道的对话轮次 |
-| `POST` | `/recruit` | 执行主动招新（body: `{ guildId, channelId, count, message? }`）|
 
 ## 注意事项
 
