@@ -1,15 +1,27 @@
-import { CDPSession, fetchTabs, openNewTab, rewriteWsHost, sendMessageRaw, sleep } from "./cdp.js";
+import {
+  CDPSession,
+  fetchTabs,
+  openNewTab,
+  rewriteWsHost,
+  sendMessageRaw,
+  sleep,
+} from "./cdp.js";
 import { GET_UNREAD_DMS_JS, buildGetMessagesJS } from "./discord-dom.js";
 import { callLLM } from "./llm.js";
 import { createLogger } from "./logger.js";
-import type { DiscordMessage, PluginLogger, ResolvedBotConfig, UnreadDM } from "./types.js";
+import type {
+  DiscordMessage,
+  Logger,
+  UnreadDM,
+  WorkerConfig,
+} from "./types.js";
 import type { ConversationStore } from "./store.js";
 
 // ── Discord Browser Poller ────────────────────────────────────────────────────
 
 /**
- * One poller per bot. Periodically connects to the bot's Chrome tab via CDP,
- * checks for unread DMs, and sends AI-generated replies.
+ * Periodically connects to the local Chrome tab via CDP, checks for unread
+ * DMs, and sends AI-generated replies.
  *
  * A single CDPSession is reused across polls; if the connection drops it is
  * transparently re-established on the next poll cycle.
@@ -19,28 +31,31 @@ export class DiscordBrowserPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly processing = new Set<string>();
   private selfName: string | null = null;
-  private readonly log: PluginLogger;
+  private running = false;
+  private readonly log: Logger;
 
   constructor(
-    private readonly botCfg: ResolvedBotConfig,
+    private readonly cfg: WorkerConfig,
     private readonly store: ConversationStore,
-    baseLogger?: PluginLogger
+    baseLogger?: Logger
   ) {
-    this.log = createLogger(`gami-discord:${botCfg.id}`, baseLogger);
+    this.log = createLogger("poller", baseLogger);
   }
 
   start(): void {
+    this.running = true;
     this.log.info(
-      `Starting poller — node ${this.botCfg.cdpHost}:${this.botCfg.cdpPort}, ` +
-        `poll every ${this.botCfg.pollIntervalMs}ms`
+      `Starting poller — CDP=${this.cfg.cdpHost}:${this.cfg.cdpPort}, ` +
+        `poll every ${this.cfg.pollIntervalMs}ms`
     );
     this.poll().catch((e) => this.log.error(`Initial poll error: ${(e as Error).message}`));
     this.timer = setInterval(() => {
       this.poll().catch((e) => this.log.error(`Poll error: ${(e as Error).message}`));
-    }, this.botCfg.pollIntervalMs);
+    }, this.cfg.pollIntervalMs);
   }
 
   stop(): void {
+    this.running = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -48,6 +63,14 @@ export class DiscordBrowserPoller {
     this.session?.close();
     this.session = null;
     this.log.info("Poller stopped.");
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  getSelfName(): string | null {
+    return this.selfName;
   }
 
   // ── Internal ─────────────────────────────────────────────────────────────
@@ -63,18 +86,18 @@ export class DiscordBrowserPoller {
       }
     }
 
-    const tabs = await fetchTabs(this.botCfg.cdpHost, this.botCfg.cdpPort);
+    const tabs = await fetchTabs(this.cfg.cdpHost, this.cfg.cdpPort);
     let discordTab = tabs.find((t) => t.url.includes("discord.com"));
 
     if (!discordTab) {
       this.log.info("No Discord tab found — opening discord.com/channels/@me");
       discordTab = await openNewTab(
-        this.botCfg.cdpHost,
-        this.botCfg.cdpPort,
+        this.cfg.cdpHost,
+        this.cfg.cdpPort,
         "https://discord.com/channels/@me"
       );
       await sleep(3000);
-      const freshTabs = await fetchTabs(this.botCfg.cdpHost, this.botCfg.cdpPort);
+      const freshTabs = await fetchTabs(this.cfg.cdpHost, this.cfg.cdpPort);
       discordTab = freshTabs.find((t) => t.url.includes("discord.com")) ?? discordTab;
     }
 
@@ -82,7 +105,7 @@ export class DiscordBrowserPoller {
       throw new Error("Could not obtain CDP WebSocket URL for Discord tab");
     }
 
-    const wsUrl = rewriteWsHost(discordTab.webSocketDebuggerUrl, this.botCfg.cdpHost);
+    const wsUrl = rewriteWsHost(discordTab.webSocketDebuggerUrl, this.cfg.cdpHost);
     const sess = new CDPSession();
     await sess.connect(wsUrl);
     this.log.debug("CDP session established");
@@ -130,7 +153,7 @@ export class DiscordBrowserPoller {
         await sleep(1800);
       }
 
-      const conv = this.store.get(this.botCfg.id, dm.channelId);
+      const conv = this.store.get(dm.channelId);
       const messages = ((await sess.evaluate(
         buildGetMessagesJS(conv.lastSeenMsgId)
       )) ?? []) as DiscordMessage[];
@@ -140,7 +163,9 @@ export class DiscordBrowserPoller {
       // First visit: record the latest message ID as anchor and skip.
       if (!conv.lastSeenMsgId && messages[0]?.author === "__INIT__") {
         conv.lastSeenMsgId = messages[0].id;
-        this.log.debug(`Channel ${dm.channelId} (${dm.label}): anchor set to msg ${conv.lastSeenMsgId}`);
+        this.log.debug(
+          `Channel ${dm.channelId} (${dm.label}): anchor set to msg ${conv.lastSeenMsgId}`
+        );
         return;
       }
 
@@ -160,41 +185,34 @@ export class DiscordBrowserPoller {
 
       // Handover mode: human agent is handling this conversation.
       if (conv.handedOver) {
-        this.log.debug(
-          `Channel ${dm.channelId}: already handed over, re-sending takeover notice`
-        );
-        await this.sendMessage(sess, dm.channelId, this.botCfg.takeoverMessage);
+        this.log.debug(`Channel ${dm.channelId}: already handed over, re-sending takeover notice`);
+        await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         return;
       }
 
-      this.store.addUserMessage(
-        this.botCfg.id,
-        dm.channelId,
-        userMsg.content,
-        this.botCfg.systemPrompt
-      );
+      this.store.addUserMessage(dm.channelId, userMsg.content, this.cfg.systemPrompt);
 
       // Turn limit reached — hand over to human agent.
-      if (conv.turns >= this.botCfg.maxDmTurns) {
+      if (conv.turns >= this.cfg.maxDmTurns) {
         conv.handedOver = true;
-        await this.sendMessage(sess, dm.channelId, this.botCfg.takeoverMessage);
+        await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         this.log.info(
           `Channel ${dm.channelId} (${dm.label}): turn limit reached — handing over to human`
         );
         return;
       }
 
-      const reply = await callLLM(conv.history, this.botCfg);
+      const reply = await callLLM(conv.history, this.cfg);
       if (!reply) {
         this.log.warn(`Channel ${dm.channelId}: LLM returned empty reply`);
         return;
       }
 
-      this.store.addAssistantMessage(this.botCfg.id, dm.channelId, reply);
+      this.store.addAssistantMessage(dm.channelId, reply);
       await this.sendMessage(sess, dm.channelId, reply);
 
       this.log.info(
-        `Replied to "${dm.label}" (${dm.channelId}) — turn ${conv.turns}/${this.botCfg.maxDmTurns}`
+        `Replied to "${dm.label}" (${dm.channelId}) — turn ${conv.turns}/${this.cfg.maxDmTurns}`
       );
     } catch (e) {
       this.log.error(`Error handling DM ${dm.channelId} (${dm.label}): ${(e as Error).message}`);
@@ -213,8 +231,6 @@ export class DiscordBrowserPoller {
       });
       await sleep(1800);
     }
-    await sendMessageRaw(sess, `gami-discord:${this.botCfg.id}`, text, (msg) =>
-      this.log.warn(msg)
-    );
+    await sendMessageRaw(sess, text, (msg) => this.log.warn(msg));
   }
 }

@@ -15,26 +15,26 @@ import {
 } from "./discord-dom.js";
 import { createLogger } from "./logger.js";
 import { RECRUIT_MESSAGE_TEMPLATES } from "./constants.js";
-import type { PluginLogger, RecruitResult, ResolvedBotConfig } from "./types.js";
+import type { Logger, RecruitResult, WorkerConfig } from "./types.js";
 
 // ── Recruitment session ───────────────────────────────────────────────────────
 
 /**
- * Open a dedicated Chrome tab on the bot's node, navigate to the target guild
- * channel, find online/idle members, and send each a recruitment DM.
+ * Open a dedicated Chrome tab, navigate to the target guild channel,
+ * find online/idle members, and send each a recruitment DM.
  *
  * A separate tab is used so the DM poller's existing session is not disturbed.
  * The tab is always closed when the session ends (success or error).
  */
 export async function runRecruitSession(
-  botCfg: ResolvedBotConfig,
+  cfg: WorkerConfig,
   guildId: string,
   channelId: string,
   count: number,
   customMessage?: string,
-  baseLogger?: PluginLogger
+  baseLogger?: Logger
 ): Promise<RecruitResult> {
-  const log = createLogger(`gami-recruit:${botCfg.id}`, baseLogger);
+  const log = createLogger("recruit", baseLogger);
   const contacted: string[] = [];
   const skipped: string[] = [];
   const errors: string[] = [];
@@ -42,10 +42,10 @@ export async function runRecruitSession(
   const channelUrl = `https://discord.com/channels/${guildId}/${channelId}`;
 
   log.info(`Opening recruitment tab → ${channelUrl}`);
-  const newTab = await openNewTab(botCfg.cdpHost, botCfg.cdpPort, channelUrl);
+  const newTab = await openNewTab(cfg.cdpHost, cfg.cdpPort, channelUrl);
   await sleep(3500);
 
-  const wsUrl = rewriteWsHost(newTab.webSocketDebuggerUrl, botCfg.cdpHost);
+  const wsUrl = rewriteWsHost(newTab.webSocketDebuggerUrl, cfg.cdpHost);
   const sess = new CDPSession();
   await sess.connect(wsUrl);
   log.debug("CDP session established for recruitment tab");
@@ -59,7 +59,7 @@ export async function runRecruitSession(
 
     if (members.length === 0) {
       skipped.push("No online/idle members found in member list");
-      return { botId: botCfg.id, guildId, channelId, contacted, skipped, errors };
+      return { guildId, channelId, contacted, skipped, errors };
     }
 
     const targets = members.slice(0, count);
@@ -108,9 +108,7 @@ export async function runRecruitSession(
         const message =
           customMessage ?? RECRUIT_MESSAGE_TEMPLATES[i % RECRUIT_MESSAGE_TEMPLATES.length];
 
-        await sendMessageRaw(sess, `gami-recruit:${botCfg.id}`, message, (msg) =>
-          log.warn(msg)
-        );
+        await sendMessageRaw(sess, message, (msg) => log.warn(msg));
         contacted.push(memberName);
         log.info(`DM sent to "${memberName}" (${i + 1}/${targets.length})`);
 
@@ -127,11 +125,11 @@ export async function runRecruitSession(
     }
   } finally {
     sess.close();
-    await closeTab(botCfg.cdpHost, botCfg.cdpPort, newTab.id);
+    await closeTab(cfg.cdpHost, cfg.cdpPort, newTab.id);
     log.info(
       `Session complete — contacted: ${contacted.length}, skipped: ${skipped.length}, errors: ${errors.length}`
     );
   }
 
-  return { botId: botCfg.id, guildId, channelId, contacted, skipped, errors };
+  return { guildId, channelId, contacted, skipped, errors };
 }

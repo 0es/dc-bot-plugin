@@ -1,5 +1,5 @@
 import type { PluginConfig, ResolvedBotConfig } from "./types.js";
-import { DEFAULTS, DEFAULT_SYSTEM_PROMPT } from "./constants.js";
+import { DEFAULTS } from "./constants.js";
 
 // ── Raw config normalisation ──────────────────────────────────────────────────
 
@@ -17,40 +17,21 @@ export function parsePluginConfig(raw: unknown): PluginConfig {
 // ── Bot config resolution ─────────────────────────────────────────────────────
 
 /**
- * Merge: global defaults → plugin-level config → per-bot overrides.
- * Returns a fully-resolved list with no optional fields.
+ * Resolve the final list of bot configs.
  *
- * When `bots` is omitted the plugin runs in single-bot mode, treating the
- * top-level config as a single bot named "default".
+ * Precedence: per-bot workerUrl → global workerUrl → built-in default.
+ * When `bots` is omitted, runs in single-bot mode using the global workerUrl.
  */
 export function resolveBotConfigs(raw: PluginConfig): ResolvedBotConfig[] {
-  const global = {
-    cdpHost: raw.cdpHost ?? DEFAULTS.cdpHost,
-    cdpPort: raw.cdpPort ?? DEFAULTS.cdpPort,
-    pollIntervalMs: raw.pollIntervalMs ?? DEFAULTS.pollIntervalMs,
-    maxDmTurns: raw.maxDmTurns ?? DEFAULTS.maxDmTurns,
-    takeoverMessage: raw.takeoverMessage ?? DEFAULTS.takeoverMessage,
-    systemPrompt: raw.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-    llmBaseUrl: raw.llmBaseUrl ?? DEFAULTS.llmBaseUrl,
-    llmModel: raw.llmModel ?? DEFAULTS.llmModel,
-    llmApiKey: raw.llmApiKey ?? DEFAULTS.llmApiKey,
-  };
+  const defaultWorkerUrl = raw.workerUrl ?? DEFAULTS.workerUrl;
 
   if (!raw.bots || raw.bots.length === 0) {
-    return [{ id: "default", label: "Default Bot", ...global }];
+    return [{ id: "default", label: "Default Bot", workerUrl: defaultWorkerUrl }];
   }
 
   return raw.bots.map((bot) => ({
     id: bot.id,
     label: bot.label ?? bot.id,
-    cdpHost: bot.cdpHost ?? global.cdpHost,
-    cdpPort: bot.cdpPort ?? global.cdpPort,
-    pollIntervalMs: global.pollIntervalMs,
-    maxDmTurns: bot.maxDmTurns ?? global.maxDmTurns,
-    takeoverMessage: bot.takeoverMessage ?? global.takeoverMessage,
-    systemPrompt: bot.systemPrompt ?? global.systemPrompt,
-    llmBaseUrl: bot.llmBaseUrl ?? global.llmBaseUrl,
-    llmModel: bot.llmModel ?? global.llmModel,
-    llmApiKey: bot.llmApiKey ?? global.llmApiKey,
+    workerUrl: bot.workerUrl ?? defaultWorkerUrl,
   }));
 }

@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import type { CDPTab } from "./types.js";
+import type { CDPTab, Logger } from "./types.js";
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -124,7 +124,6 @@ export async function closeTab(
  */
 export async function sendMessageRaw(
   sess: CDPSession,
-  tag: string,
   text: string,
   log: (msg: string) => void
 ): Promise<void> {
@@ -136,7 +135,7 @@ export async function sendMessageRaw(
     })()`)) as boolean;
 
   if (!focused) {
-    log(`Could not focus message input box`);
+    log("Could not focus message input box");
     return;
   }
 
@@ -158,5 +157,4 @@ export async function sendMessageRaw(
     nativeVirtualKeyCode: 13,
   });
   await sleep(400);
-  void tag; // suppress unused-var lint
 }

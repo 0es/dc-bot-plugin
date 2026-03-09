@@ -41,43 +41,27 @@ export interface PluginLogger {
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-/** Per-bot configuration; all fields except `id` are optional overrides. */
+/** Per-bot configuration. */
 export interface BotConfig {
   /** Unique identifier used in tool calls and log tags. */
   id: string;
   /** Human-readable label shown in logs and tool responses. */
   label?: string;
   /**
-   * Hostname or IP of the OpenClaw node running this bot's browser.
-   * Use "127.0.0.1" for the local machine (default).
+   * HTTP URL of the node worker running on this bot's machine.
+   * e.g. "http://192.168.8.101:3000"
    */
-  cdpHost?: string;
-  /** Chrome DevTools Protocol port on the node. Default: 18800 */
-  cdpPort?: number;
-  maxDmTurns?: number;
-  takeoverMessage?: string;
-  systemPrompt?: string;
-  llmBaseUrl?: string;
-  llmModel?: string;
-  llmApiKey?: string;
+  workerUrl?: string;
 }
 
 /** Top-level plugin configuration (all fields optional). */
 export interface PluginConfig {
-  maxDmTurns?: number;
-  takeoverMessage?: string;
-  /** How often to poll Discord for new DMs (ms). Default: 5000 */
-  pollIntervalMs?: number;
-  cdpHost?: string;
-  cdpPort?: number;
-  llmBaseUrl?: string;
-  llmModel?: string;
-  llmApiKey?: string;
-  systemPrompt?: string;
   /**
-   * Multi-bot definitions.
-   * If omitted, runs in single-bot mode using the global fields above.
+   * Default worker URL used when `bots` is omitted or a bot omits its own
+   * workerUrl. Default: "http://127.0.0.1:3000"
    */
+  workerUrl?: string;
+  /** Multi-bot definitions. Omit to run in single-bot mode. */
   bots?: BotConfig[];
 }
 
@@ -85,55 +69,27 @@ export interface PluginConfig {
 export interface ResolvedBotConfig {
   id: string;
   label: string;
-  cdpHost: string;
-  cdpPort: number;
-  pollIntervalMs: number;
-  maxDmTurns: number;
-  takeoverMessage: string;
-  systemPrompt: string;
-  llmBaseUrl: string;
-  llmModel: string;
-  llmApiKey: string;
+  /** HTTP base URL of the node worker for this bot. */
+  workerUrl: string;
 }
 
-// ── CDP ───────────────────────────────────────────────────────────────────────
+// ── Worker API response types ─────────────────────────────────────────────────
 
-export interface CDPTab {
-  id: string;
-  url: string;
-  title: string;
-  webSocketDebuggerUrl: string;
+export interface WorkerStatus {
+  running: boolean;
+  selfName: string | null;
+  activeConversations: Array<{ channelId: string; turns: number; handedOver: boolean }>;
 }
 
-// ── Conversation ──────────────────────────────────────────────────────────────
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export interface DiscordMessage {
-  id: string;
-  author: string;
-  content: string;
-}
-
-export interface UnreadDM {
+export interface DmStatus {
   channelId: string;
-  label: string;
-}
-
-export interface Conversation {
-  history: ChatMessage[];
   turns: number;
+  maxTurns: number;
+  turnsRemaining: number;
   handedOver: boolean;
-  lastSeenMsgId: string;
 }
-
-// ── Recruitment ───────────────────────────────────────────────────────────────
 
 export interface RecruitResult {
-  botId: string;
   guildId: string;
   channelId: string;
   contacted: string[];

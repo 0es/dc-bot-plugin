@@ -1,52 +1,20 @@
 {
   "id": "gami-discord-recruit",
   "name": "Gami Discord Recruitment",
-  "description": "Browser-based Discord DM handler for Gami gaming platform. Monitors Discord web via Chrome CDP — no bot token required. Supports multiple bots running in parallel, each on its own OpenClaw node.",
-  "version": "1.0.0",
+  "description": "Browser-based Discord DM handler for Gami gaming platform. Each bot node runs a standalone node-worker process that connects to the local Chrome CDP. The plugin routes tool calls to the correct node worker via HTTP — no direct CDP access required from the gateway.",
+  "version": "2.0.0",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "maxDmTurns": {
-        "type": "number",
-        "description": "Global default: max AI turns per DM conversation before human takeover. Default: 5"
-      },
-      "takeoverMessage": {
+      "workerUrl": {
         "type": "string",
-        "description": "Global default: message sent to user on handover."
-      },
-      "pollIntervalMs": {
-        "type": "number",
-        "description": "How often (ms) to poll Discord for new DMs. Applied to all bots. Default: 5000"
-      },
-      "cdpHost": {
-        "type": "string",
-        "description": "Global default CDP host (single-bot / fallback mode). Default: 127.0.0.1"
-      },
-      "cdpPort": {
-        "type": "number",
-        "description": "Global default CDP port (single-bot / fallback mode). Default: 18800"
-      },
-      "llmBaseUrl": {
-        "type": "string",
-        "description": "Global default LLM base URL. Default: http://192.168.8.201:8080/v1"
-      },
-      "llmModel": {
-        "type": "string",
-        "description": "Global default LLM model name. Default: default"
-      },
-      "llmApiKey": {
-        "type": "string",
-        "description": "Global default LLM API key."
-      },
-      "systemPrompt": {
-        "type": "string",
-        "description": "Global default system prompt for DM conversations."
+        "description": "Default node-worker URL for single-bot mode or fallback. Default: http://127.0.0.1:3000"
       },
       "bots": {
         "type": "array",
-        "description": "Multi-bot definitions. If omitted, runs in single-bot mode using the global fields above.",
+        "description": "Multi-bot definitions. If omitted, runs in single-bot mode using the global workerUrl above.",
         "items": {
           "type": "object",
           "additionalProperties": false,
@@ -60,37 +28,9 @@
               "type": "string",
               "description": "Human-readable bot name shown in logs."
             },
-            "cdpHost": {
+            "workerUrl": {
               "type": "string",
-              "description": "IP or hostname of the OpenClaw node running this bot's browser. Use 127.0.0.1 for local."
-            },
-            "cdpPort": {
-              "type": "number",
-              "description": "Chrome CDP port on the node. Default: 18800"
-            },
-            "maxDmTurns": {
-              "type": "number",
-              "description": "Per-bot override: max AI turns before human takeover."
-            },
-            "takeoverMessage": {
-              "type": "string",
-              "description": "Per-bot override: human takeover message."
-            },
-            "systemPrompt": {
-              "type": "string",
-              "description": "Per-bot override: system prompt for DM conversations."
-            },
-            "llmBaseUrl": {
-              "type": "string",
-              "description": "Per-bot override: LLM base URL."
-            },
-            "llmModel": {
-              "type": "string",
-              "description": "Per-bot override: LLM model name."
-            },
-            "llmApiKey": {
-              "type": "string",
-              "description": "Per-bot override: LLM API key."
+              "description": "HTTP URL of the node-worker running on this bot's machine. e.g. http://192.168.8.101:3000"
             }
           }
         }
@@ -98,14 +38,10 @@
     }
   },
   "uiHints": {
-    "maxDmTurns": { "label": "Max DM Turns (global)", "placeholder": "5" },
-    "takeoverMessage": { "label": "Human Takeover Message (global)" },
-    "pollIntervalMs": { "label": "Poll Interval ms", "placeholder": "5000" },
-    "cdpHost": { "label": "CDP Host (single-bot)", "placeholder": "127.0.0.1" },
-    "cdpPort": { "label": "CDP Port (single-bot)", "placeholder": "18800" },
-    "llmBaseUrl": { "label": "LLM Base URL", "placeholder": "http://192.168.8.201:8080/v1" },
-    "llmModel": { "label": "LLM Model Name", "placeholder": "default" },
-    "llmApiKey": { "label": "LLM API Key", "sensitive": true },
-    "systemPrompt": { "label": "System Prompt (global)" }
+    "workerUrl": {
+      "label": "Node Worker URL (single-bot)",
+      "placeholder": "http://127.0.0.1:3000",
+      "description": "URL of the node-worker process running on the same machine as Chrome."
+    }
   }
 }

@@ -4,7 +4,7 @@
 
 本文件适用于**主 Agent**，负责在 Discord 群组中主动发现用户并发起招新。
 
-**Discord DM 私聊的对话处理由插件自动完成**（browser CDP 轮询 + 本地 LLM），无需主 Agent 介入。
+**Discord DM 私聊的对话处理由各节点的 node-worker 自动完成**（每台 bot 机器本地运行 node-worker 进程，CDP 轮询 + 本地 LLM），无需主 Agent 介入。
 
 ## 主 Agent 职责
 
@@ -50,8 +50,8 @@ Gami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团
 
 | 工具 | 用途 |
 |------|------|
-| `discord_bots_list` | 查看所有已配置的 bot 及其节点地址、运行状态 |
-| `discord_recruit botId guildId channelId count` | **在指定 bot 的节点上**执行主动招新：找到在线成员并发送 DM |
+| `discord_bots_list` | 查看所有已配置的 bot 及其 worker URL、运行状态 |
+| `discord_recruit botId guildId channelId count` | **调用指定 bot 的 node-worker** 执行主动招新：找到在线成员并发送 DM |
 | `discord_dm_status botId channelId` | 查看某 DM 频道的当前轮数和接管状态 |
 | `discord_dm_reset botId channelId` | 人工客服跟进完毕后，重置轮数以重新启用 AI |
 
@@ -65,10 +65,10 @@ Gami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团
 
 → 调用 `discord_recruit`，参数：`botId: "bot-node2"`, `guildId: "123456789"`, `channelId: "987654321"`, `count: 5`
 
-工具会在 `bot-node2` 对应节点的浏览器上完成整个操作（打开独立 Tab → 扫描成员 → 逐个发 DM → 返回结果报告），不会影响该 bot 的 DM 自动回复轮询。
+工具会调用 `bot-node2` 对应节点上运行的 node-worker，由其完成整个操作（打开独立 Tab → 扫描成员 → 逐个发 DM → 返回结果报告），不会影响该 bot 的 DM 自动回复轮询。
 
 ## 操作注意事项
 
-- 使用浏览器工具（`discord-recruit` skill）进行招新，详见 `skills/discord-recruit/SKILL.md`
+- 优先使用 `discord_recruit` 工具（由 node-worker 执行）；如需手动操作本地浏览器，参考 `skills/discord-recruit/SKILL.md`
 - 每小时招新 DM 数量不超过 10 条，避免账号被限制
 - 如遇 Discord 验证码，立即停止并通知操作员

@@ -1,9 +1,6 @@
 import { parsePluginConfig, resolveBotConfigs } from "./config.js";
 import { createLogger } from "./logger.js";
-import { ConversationStore } from "./store.js";
-import { DiscordBrowserPoller } from "./poller.js";
-import { runRecruitSession } from "./recruit.js";
-import { DEFAULTS } from "./constants.js";
+import { WorkerClient } from "./worker-client.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginService,
@@ -25,18 +22,20 @@ export interface GamiDiscordService extends OpenClawPluginService {
 /**
  * Create the Gami Discord service.
  *
- * Configuration is resolved once from `pluginConfig` (the value of
- * `api.pluginConfig` at plugin load time) and never re-read at runtime.
- * This mirrors the acpx pattern where config is owned by the service layer.
+ * In the new architecture the plugin is a thin gateway layer:
+ *   - Configuration maps each bot to a node-worker URL.
+ *   - All CDP / browser operations are handled by the node-worker processes.
+ *   - The plugin only routes tool calls to the right worker via HTTP.
  */
 export function createDiscordService(pluginConfig?: unknown): GamiDiscordService {
   const rawConfig = parsePluginConfig(pluginConfig);
   const botConfigs = resolveBotConfigs(rawConfig);
 
-  const store = new ConversationStore();
-  const pollers = new Map<string, DiscordBrowserPoller>();
+  // One WorkerClient per bot, keyed by bot ID.
+  const clients = new Map<string, WorkerClient>(
+    botConfigs.map((cfg) => [cfg.id, new WorkerClient(cfg.workerUrl)])
+  );
 
-  // Placeholder until start() supplies the real ctx.logger.
   let log: PluginLogger = createLogger("gami-discord");
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -46,41 +45,23 @@ export function createDiscordService(pluginConfig?: unknown): GamiDiscordService
 
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
       log = createLogger("gami-discord", ctx.logger);
-      log.info(
-        `Starting ${botConfigs.length} bot poller(s) ` +
-          `(workspaceDir: ${ctx.workspaceDir ?? "n/a"})`
-      );
-
+      log.info(`Plugin started — ${botConfigs.length} bot(s) configured`);
       for (const cfg of botConfigs) {
-        if (pollers.has(cfg.id)) {
-          log.warn(`Bot "${cfg.id}" already running — skipping duplicate start`);
-          continue;
-        }
-        const poller = new DiscordBrowserPoller(cfg, store, log);
-        pollers.set(cfg.id, poller);
-        poller.start();
-        log.debug(`Bot "${cfg.id}" poller started (${cfg.cdpHost}:${cfg.cdpPort})`);
+        log.debug(`  ${cfg.id} (${cfg.label}) → ${cfg.workerUrl}`);
       }
     },
 
-    async stop(ctx: OpenClawPluginServiceContext): Promise<void> {
-      const stopLog = createLogger("gami-discord", ctx.logger);
-      stopLog.info(`Stopping ${pollers.size} bot poller(s)…`);
-
-      for (const [id, poller] of pollers) {
-        poller.stop();
-        stopLog.debug(`Bot "${id}" stopped`);
-      }
-      pollers.clear();
+    async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
+      log.info("Plugin stopped");
     },
 
     // ── Tool registration ─────────────────────────────────────────────────
 
     registerTools(api: OpenClawPluginApi): void {
-      registerBotsListTool(api, botConfigs, pollers, store);
-      registerDmResetTool(api, botConfigs, store, () => log);
-      registerDmStatusTool(api, botConfigs, store, () => log);
-      registerRecruitTool(api, botConfigs, () => log);
+      registerBotsListTool(api, botConfigs, clients);
+      registerDmResetTool(api, botConfigs, clients, () => log);
+      registerDmStatusTool(api, botConfigs, clients);
+      registerRecruitTool(api, botConfigs, clients, () => log);
     },
   };
 
@@ -92,28 +73,39 @@ export function createDiscordService(pluginConfig?: unknown): GamiDiscordService
 function registerBotsListTool(
   api: OpenClawPluginApi,
   botConfigs: ResolvedBotConfig[],
-  pollers: Map<string, DiscordBrowserPoller>,
-  store: ConversationStore
+  clients: Map<string, WorkerClient>
 ): void {
   api.registerTool(
     {
       name: "discord_bots_list",
       description:
-        "List all configured Discord bots, their node addresses, running state, " +
+        "List all configured Discord bots, their worker URLs, running state, " +
         "and the number of active DM conversations.",
       parameters: { type: "object", properties: {} },
       execute: async (_id, _params) => {
-        const result = botConfigs.map((cfg) => ({
-          id: cfg.id,
-          label: cfg.label,
-          node: `${cfg.cdpHost}:${cfg.cdpPort}`,
-          running: pollers.has(cfg.id),
-          maxDmTurns: cfg.maxDmTurns,
-          llmBaseUrl: cfg.llmBaseUrl,
-          llmModel: cfg.llmModel,
-          activeConversations: store.listForBot(cfg.id),
-        }));
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        const results = await Promise.all(
+          botConfigs.map(async (cfg) => {
+            const client = clients.get(cfg.id)!;
+            try {
+              const status = await client.getStatus();
+              return {
+                id: cfg.id,
+                label: cfg.label,
+                workerUrl: cfg.workerUrl,
+                ...status,
+              };
+            } catch (e) {
+              return {
+                id: cfg.id,
+                label: cfg.label,
+                workerUrl: cfg.workerUrl,
+                running: false,
+                error: (e as Error).message,
+              };
+            }
+          })
+        );
+        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
       },
     },
     { optional: true }
@@ -123,7 +115,7 @@ function registerBotsListTool(
 function registerDmResetTool(
   api: OpenClawPluginApi,
   botConfigs: ResolvedBotConfig[],
-  store: ConversationStore,
+  clients: Map<string, WorkerClient>,
   getLog: () => PluginLogger
 ): void {
   api.registerTool(
@@ -153,21 +145,26 @@ function registerDmResetTool(
         const botId = resolveBotId(params.botId as string | undefined, botConfigs);
         if (!botId) return multipleBotsError(botConfigs);
 
-        store.reset(botId, channelId);
-        getLog().info(`DM reset: bot="${botId}" channel="${channelId}"`);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                reset: true,
-                botId,
-                channelId,
-                message: "Conversation reset. AI will respond again from turn 1.",
-              }),
-            },
-          ],
-        };
+        const client = clients.get(botId)!;
+        try {
+          await client.resetDm(channelId);
+          getLog().info(`DM reset: bot="${botId}" channel="${channelId}"`);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  reset: true,
+                  botId,
+                  channelId,
+                  message: "Conversation reset. AI will respond again from turn 1.",
+                }),
+              },
+            ],
+          };
+        } catch (e) {
+          return workerError(botId, (e as Error).message);
+        }
       },
     },
     { optional: true }
@@ -177,8 +174,7 @@ function registerDmResetTool(
 function registerDmStatusTool(
   api: OpenClawPluginApi,
   botConfigs: ResolvedBotConfig[],
-  store: ConversationStore,
-  _getLog: () => PluginLogger
+  clients: Map<string, WorkerClient>
 ): void {
   api.registerTool(
     {
@@ -204,24 +200,15 @@ function registerDmStatusTool(
         const botId = resolveBotId(params.botId as string | undefined, botConfigs);
         if (!botId) return multipleBotsError(botConfigs);
 
-        const botCfg = botConfigs.find((b) => b.id === botId);
-        const { turns, handedOver } = store.summary(botId, channelId);
-        const maxTurns = botCfg?.maxDmTurns ?? DEFAULTS.maxDmTurns;
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                botId,
-                channelId,
-                turns,
-                maxTurns,
-                turnsRemaining: Math.max(0, maxTurns - turns),
-                handedOver,
-              }),
-            },
-          ],
-        };
+        const client = clients.get(botId)!;
+        try {
+          const status = await client.getDmStatus(channelId);
+          return {
+            content: [{ type: "text", text: JSON.stringify({ botId, ...status }) }],
+          };
+        } catch (e) {
+          return workerError(botId, (e as Error).message);
+        }
       },
     },
     { optional: true }
@@ -231,6 +218,7 @@ function registerDmStatusTool(
 function registerRecruitTool(
   api: OpenClawPluginApi,
   botConfigs: ResolvedBotConfig[],
+  clients: Map<string, WorkerClient>,
   getLog: () => PluginLogger
 ): void {
   api.registerTool(
@@ -238,17 +226,17 @@ function registerRecruitTool(
       name: "discord_recruit",
       description:
         "Send outbound recruitment DMs to active members in a Discord server channel, " +
-        "using a specific bot's browser session on its designated OpenClaw node. " +
-        "The bot navigates to the channel, finds online/idle members, opens each DM, " +
+        "using a specific bot's browser session on its designated node worker. " +
+        "The worker navigates to the channel, finds online/idle members, opens each DM, " +
         "and sends a recruitment message. " +
-        "Use discord_bots_list to see available bot IDs and their nodes.",
+        "Use discord_bots_list to see available bot IDs and their worker URLs.",
       parameters: {
         type: "object",
         properties: {
           botId: {
             type: "string",
             description:
-              "Bot ID whose node/browser to use for recruitment. " +
+              "Bot ID whose node worker to use for recruitment. " +
               "Omit when only one bot is configured; use discord_bots_list to see options.",
           },
           guildId: {
@@ -281,51 +269,18 @@ function registerRecruitTool(
         const botId = resolveBotId(params.botId as string | undefined, botConfigs);
         if (!botId) return multipleBotsError(botConfigs);
 
-        const botCfg = botConfigs.find((b) => b.id === botId);
-        if (!botCfg) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error: `Bot "${botId}" not found in config.`,
-                  availableBots: botConfigs.map((b) => b.id),
-                }),
-              },
-            ],
-          };
-        }
-
-        const log = getLog();
-        log.info(
-          `Recruit session: bot="${botId}" guild="${guildId}" channel="${channelId}" count=${count}`
+        const client = clients.get(botId)!;
+        getLog().info(
+          `Recruit: bot="${botId}" guild="${guildId}" channel="${channelId}" count=${count}`
         );
 
         try {
-          const result = await runRecruitSession(
-            botCfg,
-            guildId,
-            channelId,
-            count,
-            customMessage,
-            log
-          );
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        } catch (e) {
-          log.error(`Recruit session failed: ${(e as Error).message}`);
+          const result = await client.recruit(guildId, channelId, count, customMessage);
           return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  error: (e as Error).message,
-                  botId,
-                  guildId,
-                  channelId,
-                }),
-              },
-            ],
+            content: [{ type: "text", text: JSON.stringify({ botId, ...result }, null, 2) }],
           };
+        } catch (e) {
+          return workerError(botId, (e as Error).message);
         }
       },
     },
@@ -351,6 +306,17 @@ function multipleBotsError(bots: ResolvedBotConfig[]) {
           error: "Multiple bots configured — please specify botId.",
           availableBots: bots.map((b) => ({ id: b.id, label: b.label })),
         }),
+      },
+    ],
+  };
+}
+
+function workerError(botId: string, message: string) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ error: message, botId }),
       },
     ],
   };

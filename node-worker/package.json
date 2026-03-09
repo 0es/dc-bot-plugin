@@ -1,0 +1,17 @@
+{
+  "name": "gami-discord-node-worker",
+  "version": "1.0.0",
+  "description": "Node worker for Gami Discord bot — runs locally on each bot node, connects to Chrome CDP, exposes an HTTP API for the OpenClaw gateway plugin",
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.0"
+  }
+}

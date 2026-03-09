@@ -1,4 +1,4 @@
-import type { ChatMessage, ResolvedBotConfig } from "./types.js";
+import type { ChatMessage, WorkerConfig } from "./types.js";
 
 // ── LLM Client ────────────────────────────────────────────────────────────────
 
@@ -7,10 +7,7 @@ import type { ChatMessage, ResolvedBotConfig } from "./types.js";
  * Returns the assistant's reply text, or an empty string if the response
  * contains no choices.
  */
-export async function callLLM(
-  messages: ChatMessage[],
-  cfg: ResolvedBotConfig
-): Promise<string> {
+export async function callLLM(messages: ChatMessage[], cfg: WorkerConfig): Promise<string> {
   const res = await fetch(`${cfg.llmBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {

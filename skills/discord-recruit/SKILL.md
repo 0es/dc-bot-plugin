@@ -8,7 +8,7 @@ metadata: {"openclaw": {"requires": {"config": ["browser.enabled"]}, "os": ["dar
 
 Send recruitment messages to active members in a Discord server channel on behalf of Gami.
 
-**Important:** This skill handles **outbound** recruitment only (finding users and sending the first message). Once a user replies, the plugin's CDP polling loop takes over the conversation automatically — you do not need to monitor or reply to DMs.
+**Important:** This skill handles **outbound** recruitment only (finding users and sending the first message). Once a user replies, the node-worker's CDP polling loop takes over the conversation automatically — you do not need to monitor or reply to DMs.
 
 ---
 
@@ -49,8 +49,8 @@ Parameters:
 
 > "用 bot-node2 在服务器 123456789 的 987654321 频道里给 5 个活跃用户发招新消息"
 
-This will:
-1. Open a new Chrome tab on `bot-node2`'s node
+This will call the node-worker running on `bot-node2`'s machine, which will:
+1. Open a new Chrome tab (locally, via CDP)
 2. Navigate to the channel, find online/idle members
 3. Click each member → open DM → send the message
 4. Return a report: `{ contacted, skipped, errors }`
