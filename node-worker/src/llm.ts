@@ -64,8 +64,57 @@ export async function callLLM(messages: ChatMessage[], cfg: WorkerConfig): Promi
     throw new Error(`LLM HTTP ${res.status}: ${bodyText}`);
   }
 
-  const data = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const data = (await res.json()) as Record<string, unknown>;
+  const raw = extractReply(data);
+  const out = raw.trim();
+  if (!out) {
+    logEmptyResponse(data);
+  }
+  return out;
+}
+
+/** Extract assistant text from various OpenAI-compatible response shapes. */
+function extractReply(data: Record<string, unknown>): string {
+  const choices = data.choices as Array<Record<string, unknown>> | undefined;
+  const first = choices?.[0];
+  if (!first) return "";
+
+  const msg = first.message as Record<string, unknown> | undefined;
+  if (msg?.content != null) {
+    const content = msg.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const part = content.find((p) => p && typeof p === "object" && (p as Record<string, unknown>).type === "text");
+      const text = part && typeof part === "object" ? (part as Record<string, unknown>).text : undefined;
+      return typeof text === "string" ? text : "";
+    }
+    if (typeof content === "object" && content !== null) {
+      const c = content as Record<string, unknown>;
+      if (typeof c.text === "string") return c.text;
+      if (typeof c.value === "string") return c.value;
+    }
+  }
+
+  if (typeof first.text === "string") return first.text;
+  if (typeof first.content === "string") return first.content;
+
+  return "";
+}
+
+function logEmptyResponse(data: Record<string, unknown>): void {
+  const keys = Object.keys(data).join(", ");
+  const first = (data.choices as unknown[])?.[0];
+  const firstKeys = first && typeof first === "object" ? Object.keys(first as object).join(", ") : "none";
+  const msg =
+    first && typeof first === "object"
+      ? (first as Record<string, unknown>).message != null
+        ? "message keys: " + Object.keys((first as Record<string, unknown>).message as object).join(", ")
+        : "no message"
+      : "";
+  console.warn(
+    "[llm] Response had no extractable content. Top-level keys: %s; choices[0] keys: %s; %s",
+    keys,
+    firstKeys,
+    msg
+  );
 }
