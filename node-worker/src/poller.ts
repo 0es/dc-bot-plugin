@@ -17,11 +17,12 @@ import type {
 } from "./types.js";
 import type { ConversationStore } from "./store.js";
 
-// ── Discord Browser Poller ────────────────────────────────────────────────────
+/** After handling a DM, skip that channel in the unread list for this long to avoid re-entering every poll. */
+const DM_COOLDOWN_MS = 45_000;
 
 /**
  * Periodically connects to the local Chrome tab via CDP, checks for unread
- * DMs, and sends AI-generated replies.
+ * DMs and the current DM (if the tab is on a channel), and sends AI-generated replies.
  *
  * A single CDPSession is reused across polls; if the connection drops it is
  * transparently re-established on the next poll cycle.
@@ -30,6 +31,7 @@ export class DiscordBrowserPoller {
   private session: CDPSession | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly processing = new Set<string>();
+  private readonly lastHandledAt = new Map<string, number>();
   private selfName: string | null = null;
   private running = false;
   private readonly log: Logger;
@@ -136,10 +138,40 @@ export class DiscordBrowserPoller {
       this.log.debug(`Found ${unread.length} unread DM channel(s)`);
     }
 
-    for (const dm of unread) {
+    const currentUrl = (await sess.evaluate("location.href")) as string;
+    const currentDmMatch = currentUrl.match(/\/channels\/@me\/(\d+)/);
+    const currentChannelId = currentDmMatch?.[1] ?? null;
+    const seenIds = new Set(unread.map((d) => d.channelId));
+    const channelsToProcess: UnreadDM[] = [...unread];
+    if (
+      currentChannelId &&
+      !seenIds.has(currentChannelId) &&
+      currentUrl.includes("discord.com")
+    ) {
+      channelsToProcess.push({
+        channelId: currentChannelId,
+        label: "(current)",
+      });
+      this.log.debug(`Including current DM channel ${currentChannelId} (page already open)`);
+    }
+
+    for (const dm of channelsToProcess) {
       if (this.processing.has(dm.channelId)) continue;
+      const lastHandled = this.lastHandledAt.get(dm.channelId);
+      if (
+        lastHandled !== undefined &&
+        Date.now() - lastHandled < DM_COOLDOWN_MS
+      ) {
+        this.log.debug(
+          `Channel ${dm.channelId} (${dm.label}): skipping, cooldown (handled ${Math.round((Date.now() - lastHandled) / 1000)}s ago)`
+        );
+        continue;
+      }
       this.processing.add(dm.channelId);
-      this.handleDM(sess, dm).finally(() => this.processing.delete(dm.channelId));
+      this.handleDM(sess, dm).finally(() => {
+        this.processing.delete(dm.channelId);
+        this.lastHandledAt.set(dm.channelId, Date.now());
+      });
     }
   }
 
