@@ -5,35 +5,27 @@
  * no Discord bot token or Bot API is used.
  *
  * Supports multiple bots running in parallel, each on its own OpenClaw node.
- * Configuration: plugins.entries.gami-discord-recruit.config
- *
  * See README.md for full configuration reference.
  */
 
-import { DiscordService } from "./src/service.js";
-import type { PluginApi } from "./src/types.js";
+import { createDiscordService } from "./src/service.js";
+import type { OpenClawPluginApi } from "./src/types.js";
 
-export default function register(api: PluginApi) {
-  const service = new DiscordService(api);
+export default {
+  id: "gami-discord-recruit",
+  name: "Gami Discord Recruitment",
+  description:
+    "Browser-based Discord DM handler and outbound recruiter for the Gami gaming platform. " +
+    "Monitors Discord web via Chrome CDP — no bot token required. " +
+    "Supports multiple bots running in parallel, each on its own OpenClaw node.",
 
-  // Register all agent tools up front (tools are available immediately).
-  service.registerTools();
+  register(api: OpenClawPluginApi) {
+    const svc = createDiscordService(api.pluginConfig);
 
-  api.registerHook(
-    "gateway:startup",
-    (event) => service.start(event),
-    {
-      name: "gami-discord.startup",
-      description: "Starts one Discord browser DM poller per configured bot.",
-    }
-  );
+    // Tools are registered immediately so the agent can call them
+    // even before the gateway has fully started.
+    svc.registerTools(api);
 
-  api.registerHook(
-    "gateway:shutdown",
-    (event) => service.stop(event),
-    {
-      name: "gami-discord.shutdown",
-      description: "Stops all Discord browser DM pollers and clears resources.",
-    }
-  );
-}
+    api.registerService(svc);
+  },
+};

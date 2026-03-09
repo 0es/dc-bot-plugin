@@ -1,10 +1,17 @@
-import type { PluginApi, PluginConfig, ResolvedBotConfig } from "./types.js";
-import { DEFAULTS, DEFAULT_SYSTEM_PROMPT, PLUGIN_ID } from "./constants.js";
+import type { PluginConfig, ResolvedBotConfig } from "./types.js";
+import { DEFAULTS, DEFAULT_SYSTEM_PROMPT } from "./constants.js";
 
-// ── Raw config extraction ─────────────────────────────────────────────────────
+// ── Raw config normalisation ──────────────────────────────────────────────────
 
-export function resolvePluginConfig(api: PluginApi): PluginConfig {
-  return (api.config?.plugins?.entries?.[PLUGIN_ID]?.config as PluginConfig) ?? {};
+/**
+ * Cast the opaque `api.pluginConfig` value to our typed PluginConfig.
+ * Unknown/extra keys are ignored — OpenClaw validates the schema separately.
+ */
+export function parsePluginConfig(raw: unknown): PluginConfig {
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as PluginConfig;
+  }
+  return {};
 }
 
 // ── Bot config resolution ─────────────────────────────────────────────────────

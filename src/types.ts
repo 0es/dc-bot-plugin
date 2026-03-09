@@ -1,24 +1,33 @@
-// ── Plugin API ────────────────────────────────────────────────────────────────
+// ── Plugin API (OpenClaw SDK surface) ─────────────────────────────────────────
 
-export interface PluginApi {
-  config?: { plugins?: { entries?: Record<string, { config?: unknown }> } };
-  registerTool: (
-    tool: {
-      name: string;
-      description: string;
-      parameters: object;
-      execute: (
-        id: string,
-        params: Record<string, unknown>
-      ) => Promise<{ content: Array<{ type: string; text: string }> }>;
-    },
-    opts?: { optional?: boolean }
-  ) => void;
-  registerHook: (
-    event: string,
-    handler: (event: Record<string, unknown>) => Promise<void>,
-    meta: { name: string; description: string }
-  ) => void;
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: object;
+  execute: (
+    id: string,
+    params: Record<string, unknown>
+  ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+}
+
+export interface OpenClawPluginApi {
+  /** Raw plugin config object as parsed from openclaw.plugin.json / user config. */
+  pluginConfig?: unknown;
+  registerTool(tool: ToolDefinition, opts?: { optional?: boolean }): void;
+  registerService(service: OpenClawPluginService): void;
+}
+
+/** Service context passed to start() and stop() by the OpenClaw gateway. */
+export interface OpenClawPluginServiceContext {
+  logger: PluginLogger;
+  workspaceDir?: string;
+}
+
+/** Lifecycle contract for a plugin service registered via api.registerService(). */
+export interface OpenClawPluginService {
+  id: string;
+  start(ctx: OpenClawPluginServiceContext): Promise<void>;
+  stop(ctx: OpenClawPluginServiceContext): Promise<void>;
 }
 
 // ── Logger ────────────────────────────────────────────────────────────────────
