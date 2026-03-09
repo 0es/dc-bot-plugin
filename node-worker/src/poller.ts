@@ -26,10 +26,14 @@ import type { ConversationStore } from "./store.js";
  * A single CDPSession is reused across polls; if the connection drops it is
  * transparently re-established on the next poll cycle.
  */
+/** After handling a DM (anchor set, reply sent, or no new messages), skip that channel in the unread list for this long so we don't re-enter every poll while Discord still shows it as unread. */
+const DM_COOLDOWN_MS = 45_000;
+
 export class DiscordBrowserPoller {
   private session: CDPSession | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly processing = new Set<string>();
+  private readonly lastHandledAt = new Map<string, number>();
   private selfName: string | null = null;
   private running = false;
   private readonly log: Logger;
@@ -138,8 +142,21 @@ export class DiscordBrowserPoller {
 
     for (const dm of unread) {
       if (this.processing.has(dm.channelId)) continue;
+      const lastHandled = this.lastHandledAt.get(dm.channelId);
+      if (
+        lastHandled !== undefined &&
+        Date.now() - lastHandled < DM_COOLDOWN_MS
+      ) {
+        this.log.debug(
+          `Channel ${dm.channelId} (${dm.label}): skipping, cooldown (handled ${Math.round((Date.now() - lastHandled) / 1000)}s ago)`
+        );
+        continue;
+      }
       this.processing.add(dm.channelId);
-      this.handleDM(sess, dm).finally(() => this.processing.delete(dm.channelId));
+      this.handleDM(sess, dm).finally(() => {
+        this.processing.delete(dm.channelId);
+        this.lastHandledAt.set(dm.channelId, Date.now());
+      });
     }
   }
 
