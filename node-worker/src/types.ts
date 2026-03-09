@@ -45,6 +45,8 @@ export interface DiscordMessage {
   id: string;
   author: string;
   content: string;
+  /** True if this message is from the logged-in (bot) account; only reply to messages where this is false. */
+  isFromSelf: boolean;
 }
 
 export interface UnreadDM {

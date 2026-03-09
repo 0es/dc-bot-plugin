@@ -68,18 +68,46 @@ export const GET_UNREAD_DMS_JS = `
 })()`;
 
 /**
- * Fetch new messages since `lastSeenId`.
- * On the first visit (lastSeenId = "") returns a single __INIT__ sentinel with
- * the latest message ID so we never reply to messages sent before we started.
- *
- * List: [data-list-id^="chat-messages"]. Items: [data-list-item-id^="chat-messages___"] or li[id^="chat-messages-"].
- * When lastSeenId is not found in the list (e.g. virtual list scrolled), falls back to collecting any visible
- * message with id > lastSeenId (Discord snowflake order), so the latest user message is not missed.
+ * Get the current (logged-in) user's display name from the page.
+ * This is the name that appears as "author" on our own messages; use it to set isFromSelf.
  */
-export function buildGetMessagesJS(lastSeenId: string): string {
-  const escaped = JSON.stringify(lastSeenId);
+export const GET_SELF_DISPLAY_NAME_JS = `
+(function () {
+  try {
+    var el = document.querySelector('[class*="nameTag"] [class*="username"]') ||
+             document.querySelector('[aria-label*="Logged in as"] strong') ||
+             document.querySelector('[class*="userPanel"] [class*="username"]');
+    if (el && el.textContent) return el.textContent.trim();
+    var panel = document.querySelector('[class*="avatarWrapper"]');
+    if (panel && panel.closest) {
+      var p = panel.closest('[class*="panel"]');
+      if (p) {
+        var u = p.querySelector('[class*="username"]');
+        if (u && u.textContent) return u.textContent.trim();
+      }
+    }
+    return null;
+  } catch (e) { return null; }
+})()`;
+
+/**
+ * Fetch messages since lastSeenId. Each message includes isFromSelf (true = from the logged-in bot).
+ * Use isFromSelf to only reply to the other party; ignore our own messages.
+ *
+ * When lastSeenId is empty, returns all visible messages (no __INIT__); poller filters to from-other and replies to latest.
+ * List: [data-list-id^="chat-messages"]. Items: [data-list-item-id^="chat-messages___"] or li[id^="chat-messages-"].
+ */
+export function buildGetMessagesJS(lastSeenId: string, selfName: string | null): string {
+  const escapedLast = JSON.stringify(lastSeenId);
+  const escapedSelf = JSON.stringify(selfName ?? "");
   return `
-(function (lastSeenId) {
+(function (lastSeenId, selfName) {
+  selfName = (selfName && typeof selfName === 'string') ? selfName.trim() : '';
+  function isFromSelf(author) {
+    if (!author || !author.trim()) return false;
+    if (!selfName) return false;
+    return author.trim() === selfName;
+  }
   function parseMessageId(item) {
     var id = item.id;
     if (id) {
@@ -124,12 +152,16 @@ export function buildGetMessagesJS(lastSeenId: string): string {
     var byId = list.querySelectorAll('li[id^="chat-messages-"]');
     var items = byDataId.length > 0 ? Array.from(byDataId) : Array.from(byId);
     if (!lastSeenId) {
-      var maxId = null;
       for (var i = 0; i < items.length; i++) {
-        var mid = parseMessageId(items[i]);
-        if (mid && (!maxId || mid > maxId)) maxId = mid;
+        var item = items[i];
+        var msgId = parseMessageId(item);
+        if (!msgId) continue;
+        var content = getContent(item);
+        var author = getAuthor(item);
+        results.push({ id: msgId, author: author, content: content || '', isFromSelf: isFromSelf(author) });
       }
-      if (maxId) results.push({ id: maxId, author: '__INIT__', content: '' });
+      if (results.length > 0)
+        results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
       return results;
     }
     var found = false;
@@ -140,7 +172,8 @@ export function buildGetMessagesJS(lastSeenId: string): string {
       if (!found) { if (msgId === lastSeenId) found = true; continue; }
       var content = getContent(item);
       if (!content) continue;
-      results.push({ id: msgId, author: getAuthor(item), content: content });
+      var author = getAuthor(item);
+      results.push({ id: msgId, author: author, content: content, isFromSelf: isFromSelf(author) });
     }
     if (!found && items.length > 0) {
       for (var j = 0; j < items.length; j++) {
@@ -149,14 +182,15 @@ export function buildGetMessagesJS(lastSeenId: string): string {
         if (!id || id <= lastSeenId) continue;
         var c = getContent(it);
         if (!c) continue;
-        results.push({ id: id, author: getAuthor(it), content: c });
+        var author = getAuthor(it);
+        results.push({ id: id, author: author, content: c, isFromSelf: isFromSelf(author) });
       }
     }
     if (results.length > 0)
       results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
     return results;
   } catch (e) { return []; }
-})(${escaped})`;
+})(${escapedLast}, ${escapedSelf})`;
 }
 
 // ── Recruitment helpers ───────────────────────────────────────────────────────

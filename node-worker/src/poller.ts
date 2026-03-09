@@ -6,7 +6,11 @@ import {
   sendMessageRaw,
   sleep,
 } from "./cdp.js";
-import { GET_UNREAD_DMS_JS, buildGetMessagesJS } from "./discord-dom.js";
+import {
+  GET_UNREAD_DMS_JS,
+  GET_SELF_DISPLAY_NAME_JS,
+  buildGetMessagesJS,
+} from "./discord-dom.js";
 import { callLLM } from "./llm.js";
 import { createLogger } from "./logger.js";
 import type {
@@ -124,13 +128,15 @@ export class DiscordBrowserPoller {
       return;
     }
 
-    if (!this.selfName) {
+    const selfFromPage = (await sess.evaluate(GET_SELF_DISPLAY_NAME_JS)) as string | null;
+    if (selfFromPage) {
+      this.selfName = selfFromPage;
+      this.log.debug(`Self display name: "${this.selfName}"`);
+    } else if (!this.selfName) {
       this.selfName = (await sess.evaluate(
         `(document.querySelector('[class*="nameTag"] [class*="username"], [aria-label*="Logged in as"] strong') || {}).textContent || null`
       )) as string | null;
-      if (this.selfName) {
-        this.log.debug(`Detected self username: "${this.selfName}"`);
-      }
+      if (this.selfName) this.log.debug(`Self (fallback): "${this.selfName}"`);
     }
 
     const unread = ((await sess.evaluate(GET_UNREAD_DMS_JS)) ?? []) as UnreadDM[];
@@ -187,33 +193,19 @@ export class DiscordBrowserPoller {
 
       const conv = this.store.get(dm.channelId);
       const messages = ((await sess.evaluate(
-        buildGetMessagesJS(conv.lastSeenMsgId)
+        buildGetMessagesJS(conv.lastSeenMsgId, this.selfName)
       )) ?? []) as DiscordMessage[];
 
       if (messages.length === 0) return;
 
-      // First visit: record the latest message ID as anchor and skip.
-      if (!conv.lastSeenMsgId && messages[0]?.author === "__INIT__") {
-        conv.lastSeenMsgId = messages[0].id;
-        this.log.debug(
-          `Channel ${dm.channelId} (${dm.label}): anchor set to msg ${conv.lastSeenMsgId}`
-        );
-        return;
-      }
-
-      const userMessages = messages.filter(
-        (m) =>
-          m.content &&
-          m.author !== "__INIT__" &&
-          m.author !== "__continued__" &&
-          (!this.selfName || !m.author.includes(this.selfName))
-      );
-
       conv.lastSeenMsgId = messages[messages.length - 1].id;
 
-      if (userMessages.length === 0) return;
+      const fromOther = messages.filter(
+        (m) => m.content && m.author !== "__continued__" && m.isFromSelf === false
+      );
+      if (fromOther.length === 0) return;
 
-      const userMsg = userMessages[userMessages.length - 1];
+      const userMsg = fromOther[fromOther.length - 1];
 
       // Handover mode: human agent is handling this conversation.
       if (conv.handedOver) {
