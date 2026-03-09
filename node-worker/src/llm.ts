@@ -1,8 +1,8 @@
 import type { ChatMessage, WorkerConfig } from "./types.js";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Request helpers ─────────────────────────────────────────────────────────────
 
-/** Ensure content is a string safe for JSON and LLM APIs (no null bytes, no other C0/C1 control chars). */
+/** Ensure content is a string safe for JSON and LLM APIs (no null bytes, no C0/C1 control chars). */
 function sanitizeContent(value: unknown): string {
   if (value == null) return "";
   const s = typeof value === "string" ? value : String(value);
@@ -12,7 +12,10 @@ function sanitizeContent(value: unknown): string {
     .trim();
 }
 
-/** Build a clean messages array and body so the server never sees invalid or surprising input. */
+/**
+ * Build request body for llama-server (OpenAI-compatible).
+ * Uses chat_template_kwargs.enable_thinking: false so the model returns direct reply in content.
+ */
 function buildRequestBody(
   messages: ChatMessage[],
   cfg: WorkerConfig
@@ -26,6 +29,7 @@ function buildRequestBody(
     messages: safe,
     stream: false,
     max_tokens: 512,
+    chat_template_kwargs: { enable_thinking: false },
   };
   return JSON.stringify(payload);
 }
@@ -73,31 +77,45 @@ export async function callLLM(messages: ChatMessage[], cfg: WorkerConfig): Promi
   return out;
 }
 
-/** Extract assistant text from various OpenAI-compatible response shapes. */
+// ── Response extraction (llama-server / OpenAI-compatible) ──────────────────────
+
+/**
+ * Extract assistant reply from llama-server (and compatible) response.
+ * Order: message.content (string or part[].text) → message.reasoning_content → choice.text/content.
+ */
 function extractReply(data: Record<string, unknown>): string {
-  const choices = data.choices as Array<Record<string, unknown>> | undefined;
-  const first = choices?.[0];
+  const first = (data.choices as Array<Record<string, unknown>> | undefined)?.[0];
   if (!first) return "";
 
   const msg = first.message as Record<string, unknown> | undefined;
-  if (msg?.content != null) {
-    const content = msg.content;
-    if (typeof content === "string") return content;
-    if (Array.isArray(content)) {
-      const part = content.find((p) => p && typeof p === "object" && (p as Record<string, unknown>).type === "text");
-      const text = part && typeof part === "object" ? (part as Record<string, unknown>).text : undefined;
-      return typeof text === "string" ? text : "";
-    }
-    if (typeof content === "object" && content !== null) {
-      const c = content as Record<string, unknown>;
-      if (typeof c.text === "string") return c.text;
-      if (typeof c.value === "string") return c.value;
-    }
+  if (msg) {
+    const content = stringFromContent(msg.content);
+    if (content) return content;
+    const reasoning = msg.reasoning_content;
+    if (typeof reasoning === "string" && reasoning.trim()) return reasoning.trim();
   }
 
   if (typeof first.text === "string") return first.text;
   if (typeof first.content === "string") return first.content;
+  return "";
+}
 
+/** Coerce message.content (string | array of parts | object) to a single string. */
+function stringFromContent(content: unknown): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const textPart = content.find(
+      (p) => p && typeof p === "object" && (p as Record<string, unknown>).type === "text"
+    ) as Record<string, unknown> | undefined;
+    const t = textPart?.text;
+    return typeof t === "string" ? t : "";
+  }
+  if (typeof content === "object") {
+    const o = content as Record<string, unknown>;
+    if (typeof o.text === "string") return o.text;
+    if (typeof o.value === "string") return o.value;
+  }
   return "";
 }
 
