@@ -103,7 +103,7 @@ export async function openNewTab(
   pageUrl: string
 ): Promise<CDPTab> {
   const url = `http://${cdpHost}:${cdpPort}/json/new?${encodeURIComponent(pageUrl)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { method: "PUT" });
   if (!res.ok) throw new Error(`CDP open-tab HTTP ${res.status}`);
   return (await res.json()) as CDPTab;
 }
