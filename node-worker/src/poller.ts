@@ -182,8 +182,6 @@ export class DiscordBrowserPoller {
         isFromSelf: boolean;
       }>;
 
-      console.log("rawMessages", rawMessages);
-
       if (rawMessages.length === 0) return;
 
       conv.lastSeenMsgId = rawMessages[rawMessages.length - 1].id;
