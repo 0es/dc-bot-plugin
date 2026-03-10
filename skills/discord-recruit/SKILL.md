@@ -46,8 +46,9 @@ For each target user:
 2. Click **"Send Message"** (message icon on the profile card).
 3. Wait 1–2 seconds for the DM window to open.
 4. Compose a **new** recruitment message (do not use a fixed template). Then send (e.g. type + Enter).
+5. **Navigate back to the channel.** After sending, the browser stays on the DM page. You must go back to the channel page: navigate to `https://discord.com/channels/{GUILD_ID}/{CHANNEL_ID}` so you can continue with the next user. Do not stay in the DM — the node-worker will handle replies.
 
-**After sending the first message, do not stay in that DM.** The node-worker will detect the reply and handle the conversation.
+**Important:** Each send leaves you in that user’s DM. Always return to the channel URL before finding/contacting the next user.
 
 ### Step 5 — Composing the message (no fixed copy)
 

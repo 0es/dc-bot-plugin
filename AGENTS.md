@@ -45,7 +45,7 @@
 招新不使用本插件专用工具，而是由 **Gateway AI 控制 node 端浏览器**完成：
 
 - 使用 OpenClaw 的 **browser 能力**（navigate、snapshot、act 等），并指定运行 Discord 的 **node** 为操作目标。
-- 流程：导航到 `https://discord.com/channels/{guildId}/{channelId}` → 打开成员列表 → 对在线/空闲成员逐个点击 → 打开 DM → 输入招新话术并发送。
+- 流程：导航到 `https://discord.com/channels/{guildId}/{channelId}` → 打开成员列表 → 对在线/空闲成员逐个点击 → 打开 DM → 输入招新话术并发送 → **发送后当前页会停留在该 DM，你必须主动导航回频道页**（再次打开 `https://discord.com/channels/{guildId}/{channelId}`）再继续下一位，不要停留在 DM 里。
 - 详细步骤与注意事项见 `skills/discord-recruit/SKILL.md`。
 
 ## 操作注意事项
