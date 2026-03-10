@@ -34,12 +34,3 @@ Gami 是专注游戏陪玩的平台，连接游戏玩家与专业陪玩师。
 
 ## 加入条件
 年满18岁、有游戏热情、擅长至少一款主流游戏、有良好沟通能力。`;
-
-// ── Outbound recruitment message templates ────────────────────────────────────
-// Rotated per-user to avoid sending identical messages in the same session.
-
-export const RECRUIT_MESSAGE_TEMPLATES = [
-  "嗨！👋 我是 Gami 平台的招募专员。\n\nGami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团队。\n\n✨ 灵活接单 | 公平分成 | 活跃社区\n\n有兴趣了解的话欢迎回复我！🎮",
-  "你好～ 我在帮 Gami 陪玩平台招募有游戏热情的小伙伴。\n\n平台灵活、收益透明，很适合喜欢游戏的玩家 😊\n\n感兴趣可以聊聊～",
-  "嗨！在找喜欢游戏的小伙伴加入 Gami 陪玩团队～\n\n灵活接单，按时结算，多游戏品类都有 🎮\n\n有兴趣可以了解一下！",
-] as const;

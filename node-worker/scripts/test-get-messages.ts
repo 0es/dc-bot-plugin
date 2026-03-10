@@ -1,18 +1,13 @@
 /**
- * Run GET_UNREAD_DMS_JS and buildGetMessagesJS in the Discord tab via CDP.
- * Use when Discord is already open in Chrome (e.g. the same Chrome the worker uses).
+ * Run window.__dcBotPlugin (Vencord dcBotPlugin) in the Discord tab via CDP.
+ * Use when Discord is already open in Chrome with Vencord + dcBotPlugin enabled.
  *
  *   cd node-worker && npx tsx scripts/test-get-messages.ts
  *
- * Requires CDP_PORT (default 18800) and the Discord tab to be on a DM channel
- * to see message list results.
+ * Requires CDP_PORT (default 18800), a Discord tab, and Vencord Web with dcBotPlugin.
+ * If __dcBotPlugin is missing, install Vencord from the Vencord workspace and enable dcBotPlugin.
  */
-import {
-  CDPSession,
-  fetchTabs,
-  rewriteWsHost,
-} from "../src/cdp.js";
-import { GET_UNREAD_DMS_JS, buildGetMessagesJS } from "../src/discord-dom.js";
+import { CDPSession, fetchTabs, rewriteWsHost } from "../src/cdp.js";
 import { loadConfig } from "../src/config.js";
 
 async function main() {
@@ -27,14 +22,29 @@ async function main() {
   const sess = new CDPSession();
   await sess.connect(wsUrl);
 
-  const unread = (await sess.evaluate(GET_UNREAD_DMS_JS)) as unknown;
-  console.log("GET_UNREAD_DMS_JS:", JSON.stringify(unread, null, 2));
+  const hasPlugin = (await sess.evaluate("typeof window.__dcBotPlugin !== 'undefined'")) as boolean;
+  if (!hasPlugin) {
+    console.error(
+      "window.__dcBotPlugin not found. Install Vencord Web and enable the dcBotPlugin userplugin (build from the Vencord workspace with pnpm buildWeb)."
+    );
+    sess.close();
+    process.exit(1);
+  }
 
-  const messages = (await sess.evaluate(buildGetMessagesJS("", null, null))) as unknown;
-  console.log("buildGetMessagesJS('', null, null):", JSON.stringify(messages, null, 2));
+  const unread = (await sess.evaluate("window.__dcBotPlugin.getUnreadDMs()")) as unknown;
+  console.log("getUnreadDMs():", JSON.stringify(unread, null, 2));
 
-  const withLast = (await sess.evaluate(buildGetMessagesJS("__DUMMY__", null, null))) as unknown;
-  console.log("buildGetMessagesJS('__DUMMY__', null, null):", JSON.stringify(withLast, null, 2));
+  const currentUrl = (await sess.evaluate("location.href")) as string;
+  const dmMatch = currentUrl.match(/\/channels\/@me\/(\d+)/);
+  const channelId = dmMatch?.[1] ?? (Array.isArray(unread) && (unread as { channelId: string }[])[0]?.channelId);
+  if (channelId) {
+    const messages = (await sess.evaluate(
+      `window.__dcBotPlugin.getMessages(${JSON.stringify(channelId)}, null)`
+    )) as unknown;
+    console.log("getMessages(" + JSON.stringify(channelId) + ", null):", JSON.stringify(messages, null, 2));
+  } else {
+    console.log("No DM channel in URL and no unread DMs — open a DM or pass channelId to test getMessages.");
+  }
 
   sess.close();
 }

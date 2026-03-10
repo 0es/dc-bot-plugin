@@ -3,10 +3,8 @@ import {
   fetchTabs,
   openNewTab,
   rewriteWsHost,
-  sendMessageRaw,
   sleep,
 } from "./cdp.js";
-import { GET_UNREAD_DMS_JS, buildGetMessagesJS } from "./discord-dom.js";
 import { callLLM } from "./llm.js";
 import { createLogger } from "./logger.js";
 import type {
@@ -119,7 +117,14 @@ export class DiscordBrowserPoller {
       return;
     }
 
-    const unread = ((await sess.evaluate(GET_UNREAD_DMS_JS)) ?? []) as UnreadDM[];
+    const unreadRaw = await sess.evaluate(
+      "(function(){ return typeof window.__dcBotPlugin !== 'undefined' ? window.__dcBotPlugin.getUnreadDMs() : null; })()"
+    );
+    if (unreadRaw === null) {
+      this.log.debug("Vencord dcBotPlugin not found — install and enable it in the Discord tab");
+      return;
+    }
+    const unread = (unreadRaw ?? []) as UnreadDM[];
     if (unread.length > 0) {
       this.log.debug(`Found ${unread.length} unread DM channel(s)`);
     }
@@ -181,9 +186,18 @@ export class DiscordBrowserPoller {
       dbg("loading conversation from store");
       const conv = this.store.get(dm.channelId);
       dbg("evaluating getMessages in page", { lastSeenMsgId: conv.lastSeenMsgId });
-      const rawMessages = ((await sess.evaluate(
-        buildGetMessagesJS(conv.lastSeenMsgId)
-      )) ?? []) as Array<{ id: string; author: string; content: string }>;
+      const getMessagesExpr =
+        "(function(){ return window.__dcBotPlugin && window.__dcBotPlugin.getMessages(" +
+        JSON.stringify(dm.channelId) +
+        "," +
+        JSON.stringify(conv.lastSeenMsgId || null) +
+        "); })()";
+      const rawMessages = ((await sess.evaluate(getMessagesExpr)) ?? []) as Array<{
+        id: string;
+        author: string;
+        content: string;
+        isFromSelf: boolean;
+      }>;
       dbg("raw messages from page", { count: rawMessages.length, ids: rawMessages.map((m) => m.id) });
 
       if (rawMessages.length === 0) {
@@ -195,8 +209,10 @@ export class DiscordBrowserPoller {
       dbg("updated lastSeenMsgId", { lastSeenMsgId: conv.lastSeenMsgId });
 
       const messages: DiscordMessage[] = rawMessages.map((m) => ({
-        ...m,
-        isFromSelf: this.store.hasSentHash(dm.channelId, m.content),
+        id: m.id,
+        author: m.author,
+        content: m.content,
+        isFromSelf: m.isFromSelf,
       }));
       const fromOther = messages.filter(
         (m) => m.content && m.author !== "__continued__" && !m.isFromSelf
@@ -216,7 +232,6 @@ export class DiscordBrowserPoller {
       // Handover mode: human agent is handling this conversation.
       if (conv.handedOver) {
         dbg("already handed over, re-sending takeover notice");
-        this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         return;
       }
@@ -228,7 +243,6 @@ export class DiscordBrowserPoller {
       if (conv.turns >= this.cfg.maxDmTurns) {
         dbg("turn limit reached, handing over to human", { turns: conv.turns, max: this.cfg.maxDmTurns });
         conv.handedOver = true;
-        this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         this.log.info(
           `Channel ${dm.channelId} (${dm.label}): turn limit reached — handing over to human`
@@ -244,9 +258,8 @@ export class DiscordBrowserPoller {
       }
       dbg("LLM reply received", { length: reply.length, preview: reply.slice(0, 80) });
 
-      dbg("saving assistant message and sent hash, sending to Discord");
+      dbg("saving assistant message, sending to Discord");
       this.store.addAssistantMessage(dm.channelId, reply);
-      this.store.addSentHash(dm.channelId, reply);
       await this.sendMessage(sess, dm.channelId, reply);
 
       this.log.info(
@@ -271,6 +284,12 @@ export class DiscordBrowserPoller {
       });
       await sleep(1800);
     }
-    await sendMessageRaw(sess, text, (msg) => this.log.warn(msg));
+    const expr =
+      "(function(){ return window.__dcBotPlugin && window.__dcBotPlugin.sendMessage(" +
+      JSON.stringify(channelId) +
+      "," +
+      JSON.stringify(text) +
+      "); })()";
+    await sess.evaluate(expr);
   }
 }
