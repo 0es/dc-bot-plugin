@@ -77,7 +77,6 @@ export interface ResolvedBotConfig {
 
 export interface WorkerStatus {
   running: boolean;
-  selfName: string | null;
   activeConversations: Array<{ channelId: string; turns: number; handedOver: boolean }>;
 }
 

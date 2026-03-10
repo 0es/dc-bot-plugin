@@ -43,8 +43,6 @@ export function startServer(
       if (method === "GET" && path === "/status") {
         send(res, 200, {
           running: poller.isRunning(),
-          selfName: poller.getSelfName(),
-          selfUserId: poller.getSelfUserId(),
           activeConversations: store.listAll(),
         });
         return;

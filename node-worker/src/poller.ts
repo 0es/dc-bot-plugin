@@ -6,12 +6,7 @@ import {
   sendMessageRaw,
   sleep,
 } from "./cdp.js";
-import {
-  GET_UNREAD_DMS_JS,
-  GET_SELF_DISPLAY_NAME_JS,
-  GET_SELF_USER_ID_JS,
-  buildGetMessagesJS,
-} from "./discord-dom.js";
+import { GET_UNREAD_DMS_JS, buildGetMessagesJS } from "./discord-dom.js";
 import { callLLM } from "./llm.js";
 import { createLogger } from "./logger.js";
 import type {
@@ -37,8 +32,6 @@ export class DiscordBrowserPoller {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly processing = new Set<string>();
   private readonly lastHandledAt = new Map<string, number>();
-  private selfName: string | null = null;
-  private selfUserId: string | null = null;
   private running = false;
   private readonly log: Logger;
 
@@ -75,14 +68,6 @@ export class DiscordBrowserPoller {
 
   isRunning(): boolean {
     return this.running;
-  }
-
-  getSelfName(): string | null {
-    return this.selfName;
-  }
-
-  getSelfUserId(): string | null {
-    return this.selfUserId;
   }
 
   // ── Internal ─────────────────────────────────────────────────────────────
@@ -132,22 +117,6 @@ export class DiscordBrowserPoller {
     } catch (e) {
       this.log.warn(`Browser not reachable: ${(e as Error).message}`);
       return;
-    }
-
-    const selfFromPage = (await sess.evaluate(GET_SELF_DISPLAY_NAME_JS)) as string | null;
-    if (selfFromPage) {
-      this.selfName = selfFromPage;
-      this.log.debug(`Self display name: "${this.selfName}"`);
-    } else if (!this.selfName) {
-      this.selfName = (await sess.evaluate(
-        `(document.querySelector('[class*="nameTag"] [class*="username"], [aria-label*="Logged in as"] strong') || {}).textContent || null`
-      )) as string | null;
-      if (this.selfName) this.log.debug(`Self (fallback): "${this.selfName}"`);
-    }
-    const uidFromPage = (await sess.evaluate(GET_SELF_USER_ID_JS)) as string | null;
-    if (uidFromPage) {
-      this.selfUserId = uidFromPage;
-      this.log.debug(`Self user ID: ${this.selfUserId}`);
     }
 
     const unread = ((await sess.evaluate(GET_UNREAD_DMS_JS)) ?? []) as UnreadDM[];
@@ -203,16 +172,20 @@ export class DiscordBrowserPoller {
       }
 
       const conv = this.store.get(dm.channelId);
-      const messages = ((await sess.evaluate(
-        buildGetMessagesJS(conv.lastSeenMsgId, this.selfName, this.selfUserId)
-      )) ?? []) as DiscordMessage[];
+      const rawMessages = ((await sess.evaluate(
+        buildGetMessagesJS(conv.lastSeenMsgId)
+      )) ?? []) as Array<{ id: string; author: string; content: string }>;
 
-      if (messages.length === 0) return;
+      if (rawMessages.length === 0) return;
 
-      conv.lastSeenMsgId = messages[messages.length - 1].id;
+      conv.lastSeenMsgId = rawMessages[rawMessages.length - 1].id;
 
+      const messages: DiscordMessage[] = rawMessages.map((m) => ({
+        ...m,
+        isFromSelf: this.store.hasSentHash(dm.channelId, m.content),
+      }));
       const fromOther = messages.filter(
-        (m) => m.content && m.author !== "__continued__" && m.isFromSelf === false
+        (m) => m.content && m.author !== "__continued__" && !m.isFromSelf
       );
       if (fromOther.length === 0) return;
 
@@ -221,6 +194,7 @@ export class DiscordBrowserPoller {
       // Handover mode: human agent is handling this conversation.
       if (conv.handedOver) {
         this.log.debug(`Channel ${dm.channelId}: already handed over, re-sending takeover notice`);
+        this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         return;
       }
@@ -230,6 +204,7 @@ export class DiscordBrowserPoller {
       // Turn limit reached — hand over to human agent.
       if (conv.turns >= this.cfg.maxDmTurns) {
         conv.handedOver = true;
+        this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         this.log.info(
           `Channel ${dm.channelId} (${dm.label}): turn limit reached — handing over to human`
@@ -245,6 +220,7 @@ export class DiscordBrowserPoller {
       }
 
       this.store.addAssistantMessage(dm.channelId, reply);
+      this.store.addSentHash(dm.channelId, reply);
       await this.sendMessage(sess, dm.channelId, reply);
 
       this.log.info(

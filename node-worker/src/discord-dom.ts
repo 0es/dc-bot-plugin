@@ -68,95 +68,15 @@ export const GET_UNREAD_DMS_JS = `
 })()`;
 
 /**
- * Get the current (logged-in) user's display name from the page.
- * This is the name that appears as "author" on our own messages; use it as fallback for isFromSelf.
- */
-export const GET_SELF_DISPLAY_NAME_JS = `
-(function () {
-  try {
-    var el = document.querySelector('[class*="nameTag"] [class*="username"]') ||
-             document.querySelector('[aria-label*="Logged in as"] strong') ||
-             document.querySelector('[class*="userPanel"] [class*="username"]');
-    if (el && el.textContent) return el.textContent.trim();
-    var panel = document.querySelector('[class*="avatarWrapper"]');
-    if (panel && panel.closest) {
-      var p = panel.closest('[class*="panel"]');
-      if (p) {
-        var u = p.querySelector('[class*="username"]');
-        if (u && u.textContent) return u.textContent.trim();
-      }
-    }
-    return null;
-  } catch (e) { return null; }
-})()`;
-
-/**
- * Get the current (logged-in) user's numeric ID (snowflake) from the page.
- * Used to match message data-author-id for reliable isFromSelf detection.
- * Tries: user panel link href /users/<id>, then any localUser message's data-author-id.
- */
-export const GET_SELF_USER_ID_JS = `
-(function () {
-  try {
-    var panel = document.querySelector('[class*="userPanel"]') ||
-                document.querySelector('[class*="avatarWrapper"]');
-    if (panel) {
-      var link = panel.querySelector && panel.querySelector('a[href*="/users/"]');
-      if (link && link.href) {
-        var m = link.href.match(/\\/users\\/(\\d+)/);
-        if (m) return m[1];
-      }
-      var withData = panel.querySelector && panel.querySelector('[data-user-id]');
-      if (withData) {
-        var id = withData.getAttribute('data-user-id');
-        if (id) return id;
-      }
-    }
-    var ownMsg = document.querySelector('[class*="localUser"] [data-author-id], [class*="localUser"][data-author-id]');
-    if (ownMsg) {
-      var aid = ownMsg.getAttribute && ownMsg.getAttribute('data-author-id');
-      if (aid) return aid;
-    }
-    return null;
-  } catch (e) { return null; }
-})()`;
-
-/**
- * Fetch messages since lastSeenId. Each message includes isFromSelf (true = from the logged-in bot).
- * isFromSelf is determined by DOM identity first: localUser wrapper class, then data-author-id vs selfUserId, then display name match.
+ * Fetch messages since lastSeenId. Returns id, author, content only.
+ * isFromSelf is determined in Node by matching content hash against sent-message store.
  *
- * When lastSeenId is empty, returns all visible messages (no __INIT__); poller filters to from-other and replies to latest.
  * List: [data-list-id^="chat-messages"]. Items: [data-list-item-id^="chat-messages___"] or li[id^="chat-messages-"].
  */
-export function buildGetMessagesJS(
-  lastSeenId: string,
-  selfName: string | null,
-  selfUserId: string | null
-): string {
+export function buildGetMessagesJS(lastSeenId: string): string {
   const escapedLast = JSON.stringify(lastSeenId);
-  const escapedSelf = JSON.stringify(selfName ?? "");
-  const escapedUid = JSON.stringify(selfUserId ?? "");
   return `
-(function (lastSeenId, selfName, selfUserId) {
-  selfName = (selfName && typeof selfName === 'string') ? selfName.trim() : '';
-  selfUserId = (selfUserId && typeof selfUserId === 'string') ? selfUserId.trim() : '';
-  function itemIsFromSelfByDOM(item) {
-    if (!item) return false;
-    var el = item;
-    for (var up = 0; up < 12 && el; up++) {
-      var c = (el.getAttribute && el.getAttribute('class')) || '';
-      if (/localUser/i.test(c)) return true;
-      var aid = el.getAttribute && el.getAttribute('data-author-id');
-      if (selfUserId && aid && aid === selfUserId) return true;
-      el = el.parentElement;
-    }
-    return false;
-  }
-  function isFromSelfByAuthor(author) {
-    if (!author || !author.trim()) return false;
-    if (!selfName) return false;
-    return author.trim() === selfName;
-  }
+(function (lastSeenId) {
   function parseMessageId(item) {
     var id = item.id;
     if (id) {
@@ -205,10 +125,7 @@ export function buildGetMessagesJS(
         var item = items[i];
         var msgId = parseMessageId(item);
         if (!msgId) continue;
-        var content = getContent(item);
-        var author = getAuthor(item);
-        var fromSelf = itemIsFromSelfByDOM(item) || isFromSelfByAuthor(author);
-        results.push({ id: msgId, author: author, content: content || '', isFromSelf: fromSelf });
+        results.push({ id: msgId, author: getAuthor(item), content: getContent(item) || '' });
       }
       if (results.length > 0)
         results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
@@ -222,9 +139,7 @@ export function buildGetMessagesJS(
       if (!found) { if (msgId === lastSeenId) found = true; continue; }
       var content = getContent(item);
       if (!content) continue;
-      var author = getAuthor(item);
-      var fromSelf = itemIsFromSelfByDOM(item) || isFromSelfByAuthor(author);
-      results.push({ id: msgId, author: author, content: content, isFromSelf: fromSelf });
+      results.push({ id: msgId, author: getAuthor(item), content: content });
     }
     if (!found && items.length > 0) {
       for (var j = 0; j < items.length; j++) {
@@ -233,16 +148,14 @@ export function buildGetMessagesJS(
         if (!id || id <= lastSeenId) continue;
         var c = getContent(it);
         if (!c) continue;
-        var author = getAuthor(it);
-        var fromSelf = itemIsFromSelfByDOM(it) || isFromSelfByAuthor(author);
-        results.push({ id: id, author: author, content: c, isFromSelf: fromSelf });
+        results.push({ id: id, author: getAuthor(it), content: c });
       }
     }
     if (results.length > 0)
       results.sort(function (a, b) { return a.id > b.id ? 1 : a.id < b.id ? -1 : 0; });
     return results;
   } catch (e) { return []; }
-})(${escapedLast}, ${escapedSelf}, ${escapedUid})`;
+})(${escapedLast})`;
 }
 
 // ── Recruitment helpers ───────────────────────────────────────────────────────
