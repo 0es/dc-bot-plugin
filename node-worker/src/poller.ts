@@ -162,23 +162,37 @@ export class DiscordBrowserPoller {
   }
 
   private async handleDM(sess: CDPSession, dm: UnreadDM): Promise<void> {
+    const dbg = (msg: string, ...args: unknown[]) =>
+      this.log.debug(`[handleDM ${dm.channelId} (${dm.label})] ${msg}`, ...args);
     try {
+      dbg("getting current URL");
       const currentUrl = (await sess.evaluate("location.href")) as string;
       if (!currentUrl.includes(dm.channelId)) {
+        dbg("navigating to channel (current URL does not match)", { currentUrl });
         await sess.send("Page.navigate", {
           url: `https://discord.com/channels/@me/${dm.channelId}`,
         });
         await sleep(1800);
+        dbg("navigation sleep done");
+      } else {
+        dbg("already on channel, skip navigate");
       }
 
+      dbg("loading conversation from store");
       const conv = this.store.get(dm.channelId);
+      dbg("evaluating getMessages in page", { lastSeenMsgId: conv.lastSeenMsgId });
       const rawMessages = ((await sess.evaluate(
         buildGetMessagesJS(conv.lastSeenMsgId)
       )) ?? []) as Array<{ id: string; author: string; content: string }>;
+      dbg("raw messages from page", { count: rawMessages.length, ids: rawMessages.map((m) => m.id) });
 
-      if (rawMessages.length === 0) return;
+      if (rawMessages.length === 0) {
+        dbg("no new messages, skip");
+        return;
+      }
 
       conv.lastSeenMsgId = rawMessages[rawMessages.length - 1].id;
+      dbg("updated lastSeenMsgId", { lastSeenMsgId: conv.lastSeenMsgId });
 
       const messages: DiscordMessage[] = rawMessages.map((m) => ({
         ...m,
@@ -187,22 +201,32 @@ export class DiscordBrowserPoller {
       const fromOther = messages.filter(
         (m) => m.content && m.author !== "__continued__" && !m.isFromSelf
       );
-      if (fromOther.length === 0) return;
+      dbg("messages from other (non-self, with content)", {
+        fromOtherCount: fromOther.length,
+        authors: fromOther.map((m) => m.author),
+      });
+      if (fromOther.length === 0) {
+        dbg("no messages from other user, skip");
+        return;
+      }
 
       const userMsg = fromOther[fromOther.length - 1];
+      dbg("last user message", { id: userMsg.id, author: userMsg.author, contentPreview: userMsg.content.slice(0, 80) });
 
       // Handover mode: human agent is handling this conversation.
       if (conv.handedOver) {
-        this.log.debug(`Channel ${dm.channelId}: already handed over, re-sending takeover notice`);
+        dbg("already handed over, re-sending takeover notice");
         this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
         return;
       }
 
+      dbg("adding user message to store and building history");
       this.store.addUserMessage(dm.channelId, userMsg.content, this.cfg.systemPrompt);
 
       // Turn limit reached — hand over to human agent.
       if (conv.turns >= this.cfg.maxDmTurns) {
+        dbg("turn limit reached, handing over to human", { turns: conv.turns, max: this.cfg.maxDmTurns });
         conv.handedOver = true;
         this.store.addSentHash(dm.channelId, this.cfg.takeoverMessage);
         await this.sendMessage(sess, dm.channelId, this.cfg.takeoverMessage);
@@ -212,13 +236,15 @@ export class DiscordBrowserPoller {
         return;
       }
 
-      this.log.debug(`Calling LLM for channel ${dm.channelId}`);
+      dbg("calling LLM", { historyLength: conv.history.length });
       const reply = await callLLM(conv.history, this.cfg);
       if (!reply) {
         this.log.warn(`Channel ${dm.channelId}: LLM returned empty reply`);
         return;
       }
+      dbg("LLM reply received", { length: reply.length, preview: reply.slice(0, 80) });
 
+      dbg("saving assistant message and sent hash, sending to Discord");
       this.store.addAssistantMessage(dm.channelId, reply);
       this.store.addSentHash(dm.channelId, reply);
       await this.sendMessage(sess, dm.channelId, reply);
@@ -226,8 +252,10 @@ export class DiscordBrowserPoller {
       this.log.info(
         `Replied to "${dm.label}" (${dm.channelId}) — turn ${conv.turns}/${this.cfg.maxDmTurns}`
       );
+      dbg("handleDM done");
     } catch (e) {
       this.log.error(`Error handling DM ${dm.channelId} (${dm.label}): ${(e as Error).message}`);
+      dbg("handleDM error", { message: (e as Error).message });
     }
   }
 
