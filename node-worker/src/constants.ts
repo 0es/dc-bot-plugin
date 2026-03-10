@@ -2,7 +2,7 @@
 
 export const DEFAULTS = {
   workerPort: 3000,
-  maxDmTurns: 5,
+  maxDmTurns: 20,
   pollIntervalMs: 5000,
   cdpHost: "127.0.0.1",
   cdpPort: 18800,
