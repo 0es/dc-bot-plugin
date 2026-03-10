@@ -54,7 +54,7 @@ For each target user:
 
 - **Do not use a fixed script.** Write a fresh, natural message each time.
 - **Language:** Use **Indonesian (Bahasa Indonesia)** by default. If the target user’s profile or recent messages clearly use another language, you may use that language.
-- **Tone:** Sound like a real person: friendly, short, casual. You may use filler words; avoid sounding like a bot or an official announcement.
+- **Tone:** Use **localized Indonesian** tone — plenty of colloquialisms, slang, and filler words (e.g. kok, sih, deh, ya, dong, lah, kan). Keep it informal, like chatting with a friend. Never use official or announcement-style language.
 - **Content:** Introduce Gami as a community with many skilled players (game pros); users can quickly find strong players to play with. Invite them to join or ask for more info.
 - Vary the wording for every user — never send the same text to multiple people.
 
