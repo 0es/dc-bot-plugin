@@ -45,31 +45,17 @@ For each target user:
 1. Click their username/avatar → profile card appears.
 2. Click **"Send Message"** (message icon on the profile card).
 3. Wait 1–2 seconds for the DM window to open.
-4. Compose a message using the templates below, then send (e.g. type + Enter).
+4. Compose a **new** recruitment message (do not use a fixed template). Then send (e.g. type + Enter).
 
 **After sending the first message, do not stay in that DM.** The node-worker will detect the reply and handle the conversation.
 
-### Step 5 — Message templates
+### Step 5 — Composing the message (no fixed copy)
 
-Vary the wording between messages:
-
-```
-嗨！👋 我是 Gami 平台的招募专员。
-
-Gami 是游戏陪玩平台，正在招募热爱游戏的小伙伴加入陪玩团队。
-
-✨ 灵活接单 | 公平分成 | 活跃社区
-
-有兴趣了解的话欢迎回复我！🎮
-```
-
-```
-你好～ 我在帮 Gami 陪玩平台招募有游戏热情的小伙伴。
-
-平台灵活、收益透明，很适合喜欢游戏的玩家 😊
-
-感兴趣可以聊聊～
-```
+- **Do not use a fixed script.** Write a fresh, natural message each time.
+- **Language:** Use **Indonesian (Bahasa Indonesia)** by default. If the target user’s profile or recent messages clearly use another language, you may use that language.
+- **Tone:** Sound like a real person: friendly, short, casual. You may use filler words; avoid sounding like a bot or an official announcement.
+- **Content:** Introduce Gami as a community with many skilled players (game pros); users can quickly find strong players to play with. Invite them to join or ask for more info.
+- Vary the wording for every user — never send the same text to multiple people.
 
 ### Step 6 — Anti-detection behaviour
 
