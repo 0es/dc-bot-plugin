@@ -16,7 +16,7 @@ import type {
 import type { ConversationStore } from "./store.js";
 
 /** After handling a DM, skip that channel in the unread list for this long to avoid re-entering every poll. */
-const DM_COOLDOWN_MS = 20_000;
+const DM_COOLDOWN_MS = 10_000;
 
 /**
  * Periodically connects to the local Chrome tab via CDP, checks for unread
