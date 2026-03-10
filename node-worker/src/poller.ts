@@ -168,6 +168,14 @@ export class DiscordBrowserPoller {
 
   private async handleDM(sess: CDPSession, dm: UnreadDM): Promise<void> {
     try {
+      const currentUrl = (await sess.evaluate("location.href")) as string;
+      if (!currentUrl.includes(dm.channelId)) {
+        await sess.send("Page.navigate", {
+          url: `https://discord.com/channels/@me/${dm.channelId}`,
+        });
+        await sleep(1800);
+      }
+
       const conv = this.store.get(dm.channelId);
       const getMessagesExpr =
         "(function(){ return window.__dcBotPlugin && window.__dcBotPlugin.getMessages(" +
@@ -236,6 +244,13 @@ export class DiscordBrowserPoller {
     channelId: string,
     text: string
   ): Promise<void> {
+    const currentUrl = (await sess.evaluate("location.href")) as string;
+    if (!currentUrl.includes(channelId)) {
+      await sess.send("Page.navigate", {
+        url: `https://discord.com/channels/@me/${channelId}`,
+      });
+      await sleep(1800);
+    }
     const expr =
       "(function(){ return window.__dcBotPlugin && window.__dcBotPlugin.sendMessage(" +
       JSON.stringify(channelId) +
